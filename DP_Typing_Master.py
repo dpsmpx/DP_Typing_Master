@@ -1,4 +1,3 @@
-```python
 import tkinter as tk
 from tkinter import font
 import random
@@ -223,4 +222,3 @@ class TypingTrainerApp(tk.Tk):
 if __name__ == "__main__":
     app = TypingTrainerApp()
     app.run()
-```
