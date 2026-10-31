@@ -7,6 +7,7 @@ import pytest
 from dp_typing.layout import EQUIVALENTS
 from dp_typing.words import (
     MAX_WORD_LEN,
+    MIN_PSEUDO_LEN,
     MIN_WORD_LEN,
     Mode,
     TextSource,
@@ -52,16 +53,24 @@ def test_unknown_language_rejected():
 def test_pseudo_words_are_well_formed(lang, alphabet, rng):
     for _ in range(500):
         w = pseudo_word(lang, rng)
-        assert MIN_WORD_LEN <= len(w) <= MAX_WORD_LEN
+        assert MIN_PSEUDO_LEN <= len(w) <= MAX_WORD_LEN, f"обрывок {w!r}"
         assert set(w) <= alphabet, f"посторонний символ в {w!r}"
 
 
-def test_pseudo_words_are_mostly_novel(rng):
-    """Генератор должен придумывать слова, а не пересказывать словарь."""
-    real = set(load_words("ru"))
-    made = [pseudo_word("ru", rng) for _ in range(400)]
-    novel = sum(1 for w in made if w not in real)
-    assert novel / len(made) > 0.5
+@pytest.mark.parametrize("lang", ["ru", "en"])
+def test_pseudo_words_are_never_real(lang, rng):
+    """A-17: режим обещает несуществующие слова — ни одного настоящего."""
+    real = set(load_words(lang))
+    made = [pseudo_word(lang, rng) for _ in range(2000)]
+    assert not [w for w in made if w in real]
+
+
+def test_pseudo_words_can_be_limited_to_letters(rng):
+    allowed = frozenset("оеаинтср")
+    words = [pseudo_word("ru", rng, allowed=allowed, novel=False) for _ in range(200)]
+    produced = [w for w in words if w]
+    assert len(produced) > 150
+    assert all(set(w) <= allowed for w in produced)
 
 
 def test_pseudo_generation_is_reproducible():

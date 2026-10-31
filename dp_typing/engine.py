@@ -34,6 +34,11 @@ MIN_SAMPLES_FOR_WEAKNESS = 4
 #: приносила в профиль часы «печати».
 IDLE_GAP = 5.0
 
+#: Вес одного нажатия в скользящем среднем скорости и точности клавиши:
+#: последние ~20 нажатий значат больше, чем вся история. На этом держится
+#: курс (ступень растёт, когда каждая клавиша достаточно быстра и точна).
+KEY_EMA_ALPHA = 0.1
+
 
 class Mark(IntEnum):
     """Состояние одной позиции в целевом тексте."""
@@ -101,6 +106,8 @@ class TypingSession:
         "_last_at",
         "best_combo",
         "char_errors",
+        "char_time",
+        "char_time_n",
         "char_total",
         "combo",
         "correct_chars",
@@ -147,6 +154,9 @@ class TypingSession:
         # Посимвольная статистика — основа адаптивного подбора слов.
         self.char_total: Counter[str] = Counter()
         self.char_errors: Counter[str] = Counter()
+        # Время до верного нажатия по символам: сумма интервалов и их число.
+        self.char_time: Counter[str] = Counter()
+        self.char_time_n: Counter[str] = Counter()
 
     # ------------------------------------------------------------------ ввод
 
@@ -165,9 +175,11 @@ class TypingSession:
 
         now = self._clock()
         started = self.started_at is None
+        gap: float | None = None
         if started:
             self.started_at = self._last_at = now
         else:
+            gap = now - self._last_at
             self._note_activity(now)
 
         idx = self.pos
@@ -178,6 +190,11 @@ class TypingSession:
         self.char_total[expected] += 1
 
         if correct:
+            if gap is not None and gap <= IDLE_GAP:
+                # Скорость конкретной клавиши: сколько от прошлого нажатия
+                # до этого. Паузы длиннее IDLE_GAP — не про пальцы.
+                self.char_time[expected] += gap
+                self.char_time_n[expected] += 1
             self.marks[idx] = Mark.CORRECT
             self.correct_chars += 1
             self.pos += 1
@@ -294,18 +311,30 @@ class TypingSession:
         )
 
 
+def _blend(old: float | None, new: float, samples: int) -> float:
+    """Скользящее среднее: ``samples`` нажатий с весом KEY_EMA_ALPHA каждое."""
+    if old is None:
+        return new
+    keep = (1.0 - KEY_EMA_ALPHA) ** samples
+    return old * keep + new * (1.0 - keep)
+
+
 class Profile:
-    """Накопительная статистика за всю сессию.
+    """Накопительная статистика за всю историю.
 
     Живёт дольше отдельного теста: копит посимвольные ошибки (для адаптивного
-    режима) и агрегаты для итоговой панели.
+    режима), скорость и точность каждой клавиши (для курса), рекорды по
+    языку и режиму и агрегаты для итоговой панели.
     """
 
     __slots__ = (
         "best_combo",
-        "best_wpm",
         "char_errors",
         "char_total",
+        "key_acc",
+        "key_samples",
+        "key_speed",
+        "records",
         "tests",
         "total_errors",
         "total_keystrokes",
@@ -320,30 +349,59 @@ class Profile:
         self.total_errors = 0
         self.total_time = 0.0
         self.best_combo = 0
-        self.best_wpm = 0.0
+        #: Рекорды скорости (слов/мин) по ключу «язык/режим/длина/опции».
+        #: Общий рекорд был нечестным: фраза урока «рад пора пол» ставила
+        #: рекорд, недостижимый на обычном тексте (аудит, A-14).
+        self.records: dict[str, float] = {}
+        #: Скользящие средние по клавише: скорость (знаков/мин) и точность (0..1).
+        self.key_speed: dict[str, float] = {}
+        self.key_acc: dict[str, float] = {}
+        self.key_samples: Counter[str] = Counter()
 
     def absorb_keys(self, session: TypingSession) -> None:
         """Влить только посимвольную статистику — для брошенной фразы.
 
         Пропущенная (Esc) или недобранная фраза не засчитывается как тест и не
-        влияет на скорость, но её ошибки — ценные данные для слабых клавиш.
+        влияет на скорость, но её нажатия — ценные данные о клавишах.
         """
         self.char_total.update(session.char_total)
         self.char_errors.update(session.char_errors)
+        for ch, n in session.char_time_n.items():
+            spent = session.char_time[ch]
+            if n and spent > 0 and ch.strip():
+                cpm = min(60.0 * n / spent, MAX_CPM)
+                self.key_speed[ch] = _blend(self.key_speed.get(ch), cpm, n)
+        for ch, total in session.char_total.items():
+            if total and ch.strip():
+                acc = 1.0 - session.char_errors.get(ch, 0) / total
+                self.key_acc[ch] = _blend(self.key_acc.get(ch), acc, total)
+                self.key_samples[ch] += total
 
-    def absorb(self, session: TypingSession) -> None:
-        """Влить результаты теста целиком."""
+    def absorb(self, session: TypingSession, record_key: str | None = None) -> bool:
+        """Влить результаты теста целиком.
+
+        Возвращает True, если побит прежний рекорд по ``record_key`` (первый
+        результат в новом режиме рекордом не объявляется — побивать нечего).
+        """
         if session.keystrokes == 0:
-            return
+            return False
         self.absorb_keys(session)
         self.tests += 1
         self.total_keystrokes += session.keystrokes
         self.total_errors += session.errors
         self.total_time += session.elapsed()
-        m = session.metrics()
         self.best_combo = max(self.best_combo, session.best_combo)
-        if session.finished:
-            self.best_wpm = max(self.best_wpm, m.wpm)
+        if not session.finished or record_key is None:
+            return False
+        wpm = session.metrics().wpm
+        previous = self.records.get(record_key)
+        if previous is None or wpm > previous:
+            self.records[record_key] = wpm
+        return previous is not None and wpm > previous
+
+    def record(self, record_key: str) -> float:
+        """Рекорд по ключу или 0, если в этом режиме ещё не печатали."""
+        return self.records.get(record_key, 0.0)
 
     @property
     def accuracy(self) -> float:

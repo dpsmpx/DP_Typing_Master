@@ -638,3 +638,27 @@ def test_hidpi_layout_scales(hidpi_app):
 
     header = app._header_bar
     assert header.winfo_reqwidth() <= header.winfo_width(), "заголовок обрезан"
+
+
+# ================================================================ этап 2.2
+
+def test_record_tile_follows_language_and_mode(app):
+    """A-14: рекорд в уроках не показывается как рекорд обычного текста."""
+    app.profile.records.update({"ru/lesson": 90.0, "ru/common": 40.0})
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.new_test()
+    assert app.stat_vars["best"].get() == "40"
+    app.mode = Mode.LESSON
+    app._refresh_chips()
+    app.new_test()
+    assert app.stat_vars["best"].get() == "90"
+    app.toggle_language()
+    assert app.stat_vars["best"].get() == "0"
+
+
+def test_new_record_is_announced(app):
+    app.profile.records[app._record_key()] = 0.5          # заведомо побьём
+    for ch in app.session.target:
+        press(app, ch)
+    assert "новый рекорд" in app.result_var.get()

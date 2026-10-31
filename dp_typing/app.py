@@ -674,6 +674,11 @@ class TypingApp(tk.Tk):
         self._update_next_key()
         self._refresh_hint()
 
+    def _record_key(self) -> str:
+        """Рекорды раздельны по языку и режиму: урок на трёх буквах и обычный
+        текст — разные дисциплины (A-14)."""
+        return f"{self.lang}/{self.mode.value}"
+
     def _absorb_abandoned(self) -> None:
         """Брошенная фраза (Esc, Tab, смена режима, выход) не засчитывается как
         тест, но её ошибки остаются в статистике клавиш."""
@@ -810,7 +815,7 @@ class TypingApp(tk.Tk):
         if session is None:
             return
         metrics = session.metrics()
-        self.profile.absorb(session)
+        new_record = self.profile.absorb(session, self._record_key())
         self._refresh_stats(force=True)
 
         parts = [f"{metrics.wpm:.0f} слов/мин", f"{metrics.accuracy:.0f}% точности"]
@@ -818,6 +823,8 @@ class TypingApp(tk.Tk):
             parts.append(f"комбо ×{session.best_combo}")
         parts.append(count(metrics.errors, "ошибка", "ошибки", "ошибок")
                      if metrics.errors else "без ошибок")
+        if new_record:
+            parts.append("новый рекорд!")
         self.result_label.configure(
             fg=theme.accuracy_color(metrics.accuracy) if metrics.errors else theme.GOOD
         )
@@ -922,7 +929,7 @@ class TypingApp(tk.Tk):
             "cpm": f"{m.cpm:.0f}",
             "acc": f"{m.accuracy:.0f}%",
             "err": str(m.errors),
-            "best": f"{max(self.profile.best_wpm, m.wpm if session.finished else 0):.0f}",
+            "best": f"{self.profile.record(self._record_key()):.0f}",
         }
         colors = {
             "acc": theme.accuracy_color(m.accuracy),

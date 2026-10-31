@@ -336,3 +336,87 @@ def test_absorb_keys_keeps_errors_but_not_the_test():
     assert p.total_time == 0
     assert p.char_errors["о"] == 1
     assert p.char_total["к"] == 1
+
+
+# ------------------------------------------------- рекорды по режимам (A-14)
+
+def finished_session(text: str, seconds_per_char: float) -> TypingSession:
+    clock = FakeClock()
+    s = TypingSession(text, clock=clock)
+    for ch in text:
+        s.type_char(ch)
+        clock.advance(seconds_per_char)
+    return s
+
+
+def test_records_are_kept_per_key():
+    p = Profile()
+    p.absorb(finished_session("рад пора пол", 0.1), "ru/lesson/phrase")
+    p.absorb(finished_session("обычный текст", 0.3), "ru/common/phrase")
+    assert p.record("ru/lesson/phrase") > p.record("ru/common/phrase") > 0
+    assert p.record("en/common/phrase") == 0
+
+
+def test_beating_a_record_is_reported():
+    p = Profile()
+    assert p.absorb(finished_session("кот", 0.3), "k") is False   # первый — не «рекорд»
+    assert p.absorb(finished_session("кот", 0.5), "k") is False   # медленнее
+    slow = p.record("k")
+    assert p.absorb(finished_session("кот", 0.1), "k") is True
+    assert p.record("k") > slow
+
+
+def test_unfinished_session_sets_no_record():
+    s = TypingSession("кот")
+    s.type_char("к")
+    p = Profile()
+    p.absorb(s, "k")
+    assert p.records == {}
+
+
+# ------------------------------------------------- скорость каждой клавиши
+
+def test_session_times_each_correct_keystroke():
+    clock = FakeClock()
+    s = TypingSession("абв", clock=clock)
+    s.type_char("а")            # первое нажатие — интервала ещё нет
+    clock.advance(0.2)
+    s.type_char("б")
+    clock.advance(0.4)
+    s.type_char("в")
+    assert s.char_time_n == {"б": 1, "в": 1}
+    assert s.char_time["б"] == pytest.approx(0.2)
+    assert s.char_time["в"] == pytest.approx(0.4)
+
+
+def test_pauses_and_errors_do_not_time_keys():
+    clock = FakeClock()
+    s = TypingSession("абв", clock=clock)
+    s.type_char("а")
+    clock.advance(IDLE_GAP + 3)
+    s.type_char("б")            # после простоя — не скорость пальцев
+    clock.advance(0.2)
+    s.type_char("х")            # ошибка — не засчитываем
+    assert s.char_time_n == {}
+
+
+def test_profile_tracks_key_speed_and_accuracy():
+    p = Profile()
+    p.absorb(finished_session("абабабаб", 0.25), "k")      # 240 знаков/мин
+    assert p.key_speed["б"] == pytest.approx(240, rel=0.01)
+    assert p.key_acc["б"] == 1.0
+    assert p.key_samples["б"] == 4
+
+    s = TypingSession("бббб")
+    for ch in "бхбх":
+        s.type_char(ch)
+    p.absorb_keys(s)
+    assert 0.5 < p.key_acc["б"] < 1.0        # ошибки тянут среднее вниз
+    assert p.key_samples["б"] == 8
+
+
+def test_recent_keystrokes_outweigh_old_ones():
+    p = Profile()
+    p.absorb(finished_session("б" * 30, 0.6), "k")          # медленно
+    p.absorb(finished_session("б" * 30, 0.2), "k")          # быстро
+    assert p.key_speed["б"] > (100 + 300) / 2               # ближе к свежему

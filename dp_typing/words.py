@@ -24,6 +24,8 @@ from .layout import EQUIVALENTS, LAYOUTS
 
 MIN_WORD_LEN = 2
 MAX_WORD_LEN = 12
+#: Псевдослово короче трёх букв — это обрывок вроде «ch» или «те», а не слово.
+MIN_PSEUDO_LEN = 3
 
 
 class Mode(str, Enum):
@@ -78,23 +80,52 @@ def _markov(lang: str) -> dict[tuple[str, str], tuple[tuple[str, ...], tuple[int
     return {key: (tuple(c.keys()), tuple(c.values())) for key, c in counts.items()}
 
 
-def pseudo_word(lang: str, rng: random.Random) -> str:
-    """Сгенерировать произносимое псевдослово по статистике реального языка."""
+@lru_cache(maxsize=4)
+def _real_words(lang: str) -> frozenset[str]:
+    return frozenset(load_words(lang))
+
+
+def _walk(model, rng: random.Random, allowed: frozenset[str] | None) -> str:
+    """Один проход по марковской цепи; ``allowed`` ограничивает буквы."""
+    prev = cur = "\x02"
+    out: list[str] = []
+    while len(out) < MAX_WORD_LEN:
+        choices = model.get((prev, cur))
+        if choices is None:
+            break
+        chars, weights = choices
+        if allowed is not None:
+            pairs = [(c, w) for c, w in zip(chars, weights) if c == "\x03" or c in allowed]
+            if not pairs:
+                break
+            chars, weights = zip(*pairs)
+        ch = rng.choices(chars, weights=weights, k=1)[0]
+        if ch == "\x03":
+            break
+        out.append(ch)
+        prev, cur = cur, ch
+    return "".join(out)
+
+
+def pseudo_word(lang: str, rng: random.Random, *, allowed: frozenset[str] | None = None,
+                novel: bool = True) -> str:
+    """Сгенерировать произносимое псевдослово по статистике реального языка.
+
+    ``novel`` — не отдавать настоящие слова: режим обещает несуществующие,
+    а раньше каждое седьмое «псевдослово» было обычным «мой» или «day».
+    ``allowed`` — только эти буквы (для курса). Пустая строка — не вышло.
+    """
     model = _markov(lang)
-    for _ in range(24):  # практически всегда хватает 1-2 попыток
-        prev, cur = "\x02", "\x02"
-        out: list[str] = []
-        while len(out) < MAX_WORD_LEN:
-            choices = model.get((prev, cur))
-            if choices is None:
-                break
-            ch = rng.choices(choices[0], weights=choices[1], k=1)[0]
-            if ch == "\x03":
-                break
-            out.append(ch)
-            prev, cur = cur, ch
-        if MIN_WORD_LEN <= len(out) <= MAX_WORD_LEN:
-            return "".join(out)
+    real = _real_words(lang) if novel else frozenset()
+    fallback = ""
+    for _ in range(64):  # обычно хватает 1-3 попыток
+        word = _walk(model, rng, allowed)
+        if MIN_PSEUDO_LEN <= len(word) <= MAX_WORD_LEN:
+            if word not in real:
+                return word
+            fallback = fallback or word
+    if fallback or allowed is not None:
+        return fallback
     # Модель упёрлась в тупик — отдаём реальное слово, лишь бы не пустоту.
     return rng.choice(load_words(lang))
 

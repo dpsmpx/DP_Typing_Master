@@ -15,7 +15,13 @@ from .engine import Profile
 
 APP_DIR = "dp-typing-master"
 FILE_NAME = "profile.json"
-SCHEMA = 1
+#: Версия формата. 2 — рекорды по режимам и статистика клавиш (2.2.0).
+SCHEMA = 2
+#: Старые версии, которые умеем перенести, а не выбросить.
+READABLE_SCHEMAS = (1, 2)
+#: Ключ, под которым живёт общий рекорд из профиля версии 1: в каком режиме
+#: он поставлен, неизвестно, поэтому он сохраняется, но не показывается.
+LEGACY_RECORD = "legacy"
 
 
 def config_path() -> Path:
@@ -35,8 +41,19 @@ def load(path: Path | None = None) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+    if not isinstance(data, dict) or data.get("schema") not in READABLE_SCHEMAS:
         return {}
+    return _migrate(data)
+
+
+def _migrate(data: dict) -> dict:
+    """Привести профиль старой версии к текущей, ничего не потеряв."""
+    if data.get("schema") == 1:
+        data = dict(data)
+        best = data.pop("best_wpm", None)
+        if isinstance(best, (int, float)) and best > 0:
+            data["records"] = {LEGACY_RECORD: float(best)}
+        data["schema"] = SCHEMA
     return data
 
 
@@ -50,9 +67,12 @@ def save(profile: Profile, extra: dict | None = None, path: Path | None = None) 
         "total_errors": profile.total_errors,
         "total_time": round(profile.total_time, 2),
         "best_combo": profile.best_combo,
-        "best_wpm": round(profile.best_wpm, 2),
+        "records": {k: round(v, 2) for k, v in profile.records.items()},
         "char_total": dict(profile.char_total),
         "char_errors": dict(profile.char_errors),
+        "key_speed": {k: round(v, 1) for k, v in profile.key_speed.items()},
+        "key_acc": {k: round(v, 4) for k, v in profile.key_acc.items()},
+        "key_samples": dict(profile.key_samples),
         **(extra or {}),
     }
     try:
@@ -76,12 +96,30 @@ def restore(profile: Profile, data: dict) -> None:
     profile.total_errors = int(_num("total_errors"))
     profile.total_time = float(_num("total_time", 0.0))
     profile.best_combo = int(_num("best_combo"))
-    profile.best_wpm = float(_num("best_wpm", 0.0))
     for field, target in (("char_total", profile.char_total),
-                          ("char_errors", profile.char_errors)):
-        raw = data.get(field)
-        if isinstance(raw, dict):
-            target.update(
-                {k: int(v) for k, v in raw.items()
-                 if isinstance(k, str) and len(k) == 1 and isinstance(v, int)}
-            )
+                          ("char_errors", profile.char_errors),
+                          ("key_samples", profile.key_samples)):
+        target.update(_per_char(data.get(field), int))
+    profile.key_speed.update(_per_char(data.get("key_speed"), float))
+    profile.key_acc.update(_per_char(data.get("key_acc"), float))
+    records = data.get("records")
+    if isinstance(records, dict):
+        profile.records.update(
+            {k: float(v) for k, v in records.items()
+             if isinstance(k, str) and _is_number(v) and v >= 0}
+        )
+
+
+def _is_number(value) -> bool:
+    # bool — подкласс int, но True вместо числа — это мусор, а не 1.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _per_char(raw, kind) -> dict:
+    """Словарь «символ → число» из сохранённых данных; мусор отбрасывается."""
+    if not isinstance(raw, dict):
+        return {}
+    allowed = (int,) if kind is int else (int, float)
+    return {k: kind(v) for k, v in raw.items()
+            if isinstance(k, str) and len(k) == 1
+            and isinstance(v, allowed) and not isinstance(v, bool)}
