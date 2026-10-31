@@ -515,9 +515,10 @@ def test_f4_enters_lessons_and_does_not_wrap(app):
 
 def test_stat_tiles_have_equal_width(app):
     """A-20: ширина плитки не зависит от длины подписи."""
-    widths = {tile.winfo_width() for tile in app.stat_tiles}
+    shown = [tile for tile in app.stat_tiles if tile.winfo_ismapped()]
+    widths = {tile.winfo_width() for tile in shown}
     assert max(widths) - min(widths) <= 1
-    right = app.stat_tiles[-1].winfo_x() + app.stat_tiles[-1].winfo_width()
+    right = shown[-1].winfo_x() + shown[-1].winfo_width()
     assert abs(right - app._text_wrap.winfo_width()) <= 1     # край вровень с фразой
 
 
@@ -650,7 +651,7 @@ def test_hidpi_layout_scales(hidpi_app):
 
 def test_record_tile_follows_language_and_mode(app):
     """A-14: рекорд в уроках не показывается как рекорд обычного текста."""
-    app.profile.records.update({"ru/lesson": 90.0, "ru/common": 40.0})
+    app.profile.records.update({"ru/lesson/phrase": 90.0, "ru/common/phrase": 40.0})
     app.mode = Mode.COMMON
     app._refresh_chips()
     app.new_test()
@@ -766,3 +767,92 @@ def test_full_keyboard_fits_minimum_window(app):
     for ch, (rect, label) in app._kb_items.items():
         r, t = app.kb_canvas.bbox(rect), app.kb_canvas.bbox(label)
         assert t[1] >= r[1] - 1 and t[3] <= r[3] + 1, f"подпись «{ch}» выше клавиши"
+
+
+# ------------------------------------------------------------ длина теста
+
+def test_phrase_has_no_extra_tile(app):
+    from dp_typing.words import LENGTHS
+
+    app.set_length(LENGTHS[0])
+    app.update()
+    assert not app.stat_tiles[-1].winfo_ismapped()
+
+
+def test_word_count_test_counts_words(app):
+    from dp_typing.words import Length
+
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.set_length(Length("words", 25))
+    settle(app, 300)
+    target = app.session.target
+    assert len(target.split()) == 25
+    assert app.stat_tiles[-1].winfo_ismapped()
+    assert app._extra_caption.cget("text") == "СЛОВА"
+    assert app.stat_vars["extra"].get() == "0/25"
+    first_two = target[: target.index(" ", target.index(" ") + 1) + 1]
+    for ch in first_two:
+        press(app, ch)
+    app._refresh_stats(force=True)
+    assert app.stat_vars["extra"].get() == "2/25"
+    assert "25 СЛОВ" in app.length_var.get()
+
+
+def test_long_text_scrolls_three_lines_at_a_time(app):
+    from dp_typing.words import Length
+
+    app.set_length(Length("words", 100))
+    settle(app, 300)
+    assert len(app._lines) > 3
+    assert int(app.text.cget("height")) == 3
+    for ch in app.session.target[: len(app._lines[0]) + len(app._lines[1])]:
+        press(app, ch)
+    # Каретка на третьей строке — сверху вторая, только что набранная.
+    assert app._rows[app.session.pos] == 3
+    assert app._view_top == 2
+    assert app.text.index("@0,0").startswith("2.")
+
+
+def test_timed_test_counts_down_and_finishes_by_itself(app):
+    from dp_typing.words import Length
+
+    app.set_length(Length("time", 15))
+    settle(app, 200)
+    assert app.session.time_limit == 15
+    assert app._extra_caption.cget("text") == "ОСТАЛОСЬ, С"
+    assert app.stat_vars["extra"].get() == "15"
+    app.session.time_limit = 0.3                 # не ждать 15 секунд в тесте
+    press(app, app.session.target[0])
+    settle(app, 800)
+    assert app.session.finished and app.session.timed_out
+    assert app.result_var.get()
+    assert app.stat_vars["extra"].get() == "0"
+    assert pending_after_jobs(app) == 0
+    assert app.profile.tests == 1
+
+
+def test_length_is_part_of_the_record_and_persisted(app, tmp_path):
+    import json
+
+    from dp_typing.words import Length
+
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    phrase_key = app._record_key()
+    app.set_length(Length("time", 60))
+    assert app._record_key() != phrase_key and "/t60" in app._record_key()
+    app._persist()
+    saved = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
+    assert saved["length"] == "t60"
+
+
+def test_f8_cycles_lengths(app):
+    from dp_typing.words import LENGTHS
+
+    app.set_length(LENGTHS[0])
+    app.cycle_length()
+    assert app.length == LENGTHS[1]
+    app.cycle_length(-1)
+    app.cycle_length(-1)
+    assert app.length == LENGTHS[-1]

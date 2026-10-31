@@ -122,6 +122,8 @@ class TypingSession:
         "started_at",
         "strict",
         "target",
+        "time_limit",
+        "timed_out",
     )
 
     def __init__(
@@ -131,6 +133,7 @@ class TypingSession:
         strict: bool = False,
         clock: Callable[[], float] = time.perf_counter,
         equivalents: Mapping[str, str] | None = None,
+        time_limit: float | None = None,
     ) -> None:
         if not target:
             raise ValueError("target не может быть пустым")
@@ -138,6 +141,9 @@ class TypingSession:
         self.strict = strict
         self._clock = clock
         self.equivalents: dict[str, str] = dict(equivalents or {})
+        #: Тест на время: столько секунд набора (паузы не в счёт), потом — финиш.
+        self.time_limit = time_limit
+        self.timed_out = False
         self.marks: list[Mark] = [Mark.PENDING] * len(target)
         self.pos = 0
         self.keystrokes = 0
@@ -174,6 +180,9 @@ class TypingSession:
             return _IGNORED
 
         now = self._clock()
+        if self.check_timeout(now):
+            # Время вышло раньше, чем пришло нажатие: оно уже не в счёт.
+            return KeyEffect(accepted=True, finished=True)
         started = self.started_at is None
         gap: float | None = None
         if started:
@@ -278,6 +287,28 @@ class TypingSession:
             end = self._clock() if now is None else now
             idle = max(end - self._last_at - IDLE_GAP, 0.0)  # идущий сейчас простой
         return max(end - self.started_at - self.paused - idle, 0.0)
+
+    def check_timeout(self, now: float | None = None) -> bool:
+        """Закончить тест на время, если лимит набран. True — только что закончен.
+
+        Финиш ставится ровно на момент, когда лимит был достигнут, а не на
+        момент проверки: таймер интерфейса тикает раз в 200 мс, и иначе тест
+        «на 30 секунд» длился бы до 30,2 с.
+        """
+        if (self.time_limit is None or self.finished_at is not None
+                or self.started_at is None):
+            return False
+        if self.elapsed(now) < self.time_limit:
+            return False
+        self.finished_at = self.started_at + self.paused + self.time_limit
+        self.timed_out = True
+        return True
+
+    def remaining(self, now: float | None = None) -> float | None:
+        """Сколько секунд осталось в тесте на время (None — тест не на время)."""
+        if self.time_limit is None:
+            return None
+        return max(self.time_limit - self.elapsed(now), 0.0)
 
     def is_idle(self, now: float | None = None) -> bool:
         """Тест начат, не закончен, и нажатий не было дольше IDLE_GAP."""

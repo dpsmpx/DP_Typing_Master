@@ -249,3 +249,36 @@ def test_options_key_is_stable():
     assert TextOptions().key == ""
     assert ALL_ON.key == "A.1"
     assert TextOptions(punct=True).key == "."
+
+
+# ------------------------------------------------------------ длина теста
+
+def test_lengths_round_trip_through_their_keys():
+    from dp_typing.words import LENGTHS, Length
+
+    keys = [length.key for length in LENGTHS]
+    assert len(set(keys)) == len(keys)
+    for length in LENGTHS:
+        assert Length.parse(length.key) == length
+    assert Length.parse("ерунда") == LENGTHS[0]
+    assert Length.parse(None).kind == "phrase"
+
+
+def test_timed_tests_get_enough_text():
+    """Даже на потолке скорости (1500 знаков/мин) текст не кончится раньше."""
+    from dp_typing.engine import MAX_CPM
+    from dp_typing.words import LENGTHS
+
+    rng = random.Random(3)
+    for length in (x for x in LENGTHS if x.timed):
+        source = TextSource("ru", Mode.COMMON, rng=rng)
+        text = source.phrase(length.word_count())
+        assert len(text) >= MAX_CPM / 60 * length.amount
+
+
+def test_length_titles():
+    from dp_typing.words import Length
+
+    assert Length("phrase").title == "ФРАЗА"
+    assert Length("words", 25).title == "25 СЛОВ"
+    assert Length("time", 60).title == "60 С"

@@ -269,6 +269,64 @@ def decorate(words: Sequence[str], rng: random.Random, options: TextOptions) -> 
     return out
 
 
+# ------------------------------------------------------------ длина теста
+
+#: Слов в «фразе» — классическом коротком тесте.
+PHRASE_WORDS = 9
+#: Сколько слов готовить на секунду теста на время. Потолок скорости —
+#: 1500 знаков/мин = 25 знаков/с, средняя длина слова с пробелом — 6-7
+#: знаков: 4.2 слова в секунду с запасом не кончатся раньше времени.
+WORDS_PER_SECOND = 4.2
+
+
+@dataclass(frozen=True)
+class Length:
+    """Длина теста: одна фраза, N слов или N секунд (Monkeytype, TIPP10)."""
+
+    kind: str           # "phrase", "words" или "time"
+    amount: int = 0
+
+    @property
+    def key(self) -> str:
+        """Метка для профиля и ключа рекорда: phrase, w25, t60."""
+        return "phrase" if self.kind == "phrase" else f"{self.kind[0]}{self.amount}"
+
+    @property
+    def title(self) -> str:
+        if self.kind == "words":
+            return f"{self.amount} СЛОВ"
+        if self.kind == "time":
+            return f"{self.amount} С"
+        return "ФРАЗА"
+
+    @property
+    def timed(self) -> bool:
+        return self.kind == "time"
+
+    def word_count(self) -> int:
+        """Сколько слов сгенерировать для теста такой длины."""
+        if self.kind == "words":
+            return self.amount
+        if self.kind == "time":
+            return int(self.amount * WORDS_PER_SECOND) + 5
+        return PHRASE_WORDS
+
+    @classmethod
+    def parse(cls, key: object) -> Length:
+        """Обратно из метки; неизвестное — фраза (профиль мог быть испорчен)."""
+        for length in LENGTHS:
+            if length.key == key:
+                return length
+        return LENGTHS[0]
+
+
+LENGTHS: tuple[Length, ...] = (
+    Length("phrase"),
+    *(Length("words", n) for n in (10, 25, 50, 100)),
+    *(Length("time", n) for n in (15, 30, 60, 120)),
+)
+
+
 # --------------------------------------------------------------- фасад
 
 class TextSource:

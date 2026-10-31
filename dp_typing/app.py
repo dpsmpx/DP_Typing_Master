@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 import time
 import tkinter as tk
@@ -42,15 +43,15 @@ from .layout import (
 from .storage import load as load_profile
 from .storage import restore as restore_profile
 from .storage import save as save_profile
-from .words import Mode, TextOptions, TextSource, lesson_stages
+from .words import LENGTHS, Length, Mode, TextOptions, TextSource, lesson_stages
 
 #: Период обновления метрик во время теста, мс.
 TICK_MS = 200
 #: Кадры анимации комбо и шаг между ними.
 ANIM_FRAMES = 8
 ANIM_STEP_MS = 28
-#: Слов во фразе.
-WORDS_PER_TEST = 9
+#: Сколько строк текста видно сразу; длинный тест прокручивается построчно.
+VISIBLE_LINES = 3
 #: Точность, с которой урок повышает ступень.
 STAGE_UP_ACCURACY = 96.0
 #: Сколько ждать второго F7: сброс всей статистики только с подтверждением.
@@ -72,6 +73,10 @@ BODY_PADY = 14
 TEXT_PADX = 28
 #: Ниже этой высоты холста клавиши стали бы нечитаемыми (4 ряда по ~13 px).
 KB_MIN_H = 64
+#: До какой доли штатной высоты можно ужать клавиатуру, не переходя в
+#: компактный вид. Компактный экономит ~200 px, и при нехватке в 50 px под
+#: фразой оставалась пустота, а текст мельчал зря.
+NORMAL_KB_MIN_RATIO = 0.65
 #: Ширина клавиш в «обычных» клавишах: Shift и пробел.
 SHIFT_UNITS = 2.2
 SPACE_UNITS = 7
@@ -158,6 +163,7 @@ class TypingApp(tk.Tk):
         self.stage: int = int(saved.get("stage", 0) or 0)
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
+        self.length = Length.parse(saved.get("length"))
         self.options = TextOptions(caps=bool(saved.get("caps", False)),
                                    punct=bool(saved.get("punct", False)),
                                    digits=bool(saved.get("digits", False)))
@@ -190,10 +196,14 @@ class TypingApp(tk.Tk):
         # индексы Tk начала и конца символа ``pos``.
         self._lines: list[str] = []
         self._spans: list[tuple[str, str]] = []
+        self._rows: list[int] = []        # номер строки для каждой позиции
+        self._view_top = 1                # верхняя видимая строка длинного теста
         self._caret_pos: int | None = None
         # Тег каретки: обычный или «ошибка под кареткой» (строгий режим).
         self._caret_tag = "caret"
-        self._compact_saving = 0
+        # Сколько экономит компактная плотность на всём, кроме самой фразы;
+        # фразу пересчитываем каждый раз (см. _normal_text_height).
+        self._nontext_saving = 0
         self._fitting = False
         self._win_size = (0, 0)
         self._text_width = 0
@@ -255,6 +265,8 @@ class TypingApp(tk.Tk):
         ui = theme.pick_family(available, theme.UI_FAMILIES)
         d = self.density
         self.f_target = tkfont.Font(family=mono, size=d.target)
+        # Для оценки «влезет ли обычная плотность» без переключения шрифтов.
+        self._f_target_normal = tkfont.Font(family=mono, size=NORMAL.target)
         self.f_stat = tkfont.Font(family=ui, size=d.stat, weight="bold")
         self.f_caption = tkfont.Font(family=ui, size=9)
         self.f_chip = tkfont.Font(family=ui, size=10, weight="bold")
@@ -310,6 +322,12 @@ class TypingApp(tk.Tk):
         # (в один ряд с чипами режима они не влезали и обрезали ступень).
         self._options_bar = tk.Frame(parent, bg=theme.BG)
         self._options_bar.pack(fill="x")
+        self.length_var = tk.StringVar()
+        self._length_chip = tk.Label(self._options_bar, textvariable=self.length_var,
+                                     bg=theme.PANEL, fg=theme.TEXT_DIM, font=self.f_chip,
+                                     padx=self.px(8), pady=self.px(2), cursor="hand2")
+        self._length_chip.pack(side="left", padx=(0, self.px(12)))
+        self._length_chip.bind("<Button-1>", self._show_length_menu)
         self._option_box = tk.Frame(self._options_bar, bg=theme.BG)
         self._option_chips: dict[str, tk.Label] = {}
         for name, text, cmd in (("caps", "Аа", self.toggle_caps),
@@ -337,7 +355,7 @@ class TypingApp(tk.Tk):
         self.stat_tiles: list[tk.Frame] = []
         self._tile_parts: list[tuple[tk.Label, tk.Label]] = []
         tiles = (("wpm", "СЛОВ/МИН"), ("cpm", "ЗНАКОВ/МИН"), ("acc", "ТОЧНОСТЬ"),
-                 ("err", "ОШИБКИ"), ("best", "РЕКОРД"))
+                 ("err", "ОШИБКИ"), ("best", "РЕКОРД"), ("extra", ""))
         for i, (key, caption) in enumerate(tiles):
             tile = tk.Frame(row, bg=theme.PANEL)
             # Плитки в чётных колонках с общей группой uniform — одинаковой
@@ -358,6 +376,11 @@ class TypingApp(tk.Tk):
             self.stat_labels[key] = value
             self.stat_tiles.append(tile)
             self._tile_parts.append((value, cap))
+        # Шестая плитка — «осталось секунд» или «слов набрано» — только в
+        # тестах на время и на слова.
+        self._extra_caption = self._tile_parts[-1][1]
+        self._extra_shown = True
+        self._refresh_extra_tile()
 
         bar_h = self.px(3)
         self.progress = tk.Canvas(parent, height=bar_h, bg=theme.PANEL, highlightthickness=0)
@@ -460,6 +483,7 @@ class TypingApp(tk.Tk):
             ("F5", "строгий режим (не пускает дальше при ошибке)"),
             ("F6", "показать / скрыть экранную клавиатуру"),
             ("F7 дважды", "сбросить всю накопленную статистику"),
+            ("F8 / Shift+F8", "длина теста: фраза, 10–100 слов, 15–120 секунд"),
             ("F9 / F10 / F11", "заглавные / знаки препинания / цифры"),
             ("F1", "закрыть эту справку"),
             ("Ctrl+Q", "выход"),
@@ -557,24 +581,60 @@ class TypingApp(tk.Tk):
         finally:
             self._fitting = False
 
+    def _normal_text_height(self) -> int:
+        """Высота поля с фразой в обычной плотности — без переключения.
+
+        Считается по метрикам шрифта для текущей фразы и ширины: оценка,
+        снятая на другой фразе, «залипала» — окно увеличили, а интерфейс
+        оставался компактным.
+        """
+        d, t = self._normal, self.text
+        avail = t.winfo_width() - 2 * int(t.cget("padx")) - 1
+        phrase = self.session.target if self.session else ""
+        font = self._f_target_normal
+        lines = len(wrap_words(phrase, avail, font.measure)) if avail > 0 else 1
+        line_h = font.metrics("linespace") + d.line_above + d.line_below
+        return min(lines, VISIBLE_LINES) * line_h + 2 * d.text_pady
+
+    def _squeeze_budget(self, density: Density) -> int:
+        """На сколько пикселей можно ужать клавиатуру в этой плотности."""
+        if not self.kb_holder.winfo_manager():
+            return 0
+        full = self._kb_height() if density is self.density else (
+            density.kb_h + (density.kb_extra if self._kb_full else 0))
+        floor = (round(full * NORMAL_KB_MIN_RATIO) if density is self._normal
+                 else self.px(KB_MIN_H))
+        return max(full - floor, 0)
+
     def _fit_density(self, avail: int) -> None:
+        """Порядок отступления: ужать клавиатуру в обычном виде → перейти в
+        компактный → ужать клавиатуру и в нём (клавиши масштабируются по
+        высоте холста и остаются целиком видны)."""
         self.update_idletasks()
-        if (self.compact
-                and self._required_height(full_keyboard=True) + self._compact_saving <= avail):
-            self._set_density(self._normal)
-            self.update_idletasks()
+        if self.compact:
+            text_now = self.text.winfo_reqheight()
+            estimate = (self._required_height(full_keyboard=True) - text_now
+                        + self._normal_text_height() + self._nontext_saving)
+            if estimate - self._squeeze_budget(self._normal) <= avail:
+                self._set_density(self._normal)
+                self.update_idletasks()
         if not self.compact:
-            need = self._required_height()
-            if need <= avail:
+            need = self._required_height(full_keyboard=True)
+            if need - self._squeeze_budget(self._normal) <= avail:
+                self._squeeze_keyboard(need - avail)
                 return
+            text_normal = self.text.winfo_reqheight()
             self._set_density(self._compact)
             self.update_idletasks()
-            self._compact_saving = max(need - self._required_height(), 0)
-        # Компактно и всё равно тесно (длинная фраза в минимальном окне):
-        # отдаём недостающее за счёт клавиатуры — клавиши масштабируются
-        # по высоте холста и остаются целиком видны.
-        over = self._required_height(full_keyboard=True) - avail
-        kb_h = max(self.px(KB_MIN_H), self._kb_height() - max(over, 0))
+            compact_need = self._required_height(full_keyboard=True)
+            self._nontext_saving = max(
+                (need - text_normal) - (compact_need - self.text.winfo_reqheight()), 0)
+        self._squeeze_keyboard(self._required_height(full_keyboard=True) - avail)
+
+    def _squeeze_keyboard(self, over: int) -> None:
+        """Отдать ``over`` пикселей за счёт клавиатуры (≤ 0 — вернуть штатную)."""
+        floor = self._kb_height() - self._squeeze_budget(self.density)
+        kb_h = max(floor, self._kb_height() - max(over, 0))
         if int(self.kb_canvas.cget("height")) != kb_h:
             self.kb_canvas.configure(height=kb_h)
 
@@ -608,6 +668,8 @@ class TypingApp(tk.Tk):
         self.bind("<F5>", lambda _e: self._action(self.toggle_strict))
         self.bind("<F6>", lambda _e: self._action(self.toggle_keyboard))
         self.bind("<F7>", lambda _e: self._action(self.request_reset))
+        self.bind("<F8>", lambda _e: self._action(self.cycle_length))
+        self.bind("<Shift-F8>", lambda _e: self._action(lambda: self.cycle_length(-1)))
         self.bind("<F9>", lambda _e: self._action(self.toggle_caps))
         self.bind("<F10>", lambda _e: self._action(self.toggle_punct))
         self.bind("<F11>", lambda _e: self._action(self.toggle_digits))
@@ -676,7 +738,8 @@ class TypingApp(tk.Tk):
         self._absorb_abandoned()
         self._stop_tick()
         self.source.lang, self.source.mode, self.source.stage = self.lang, self.mode, self.stage
-        self._start_session(self.source.phrase(WORDS_PER_TEST, self.profile.weak_chars()))
+        self._start_session(self.source.phrase(self.length.word_count(),
+                                               self.profile.weak_chars()))
 
     def restart_test(self) -> None:
         """Та же фраза заново — полезно, чтобы отработать сложное место."""
@@ -687,8 +750,9 @@ class TypingApp(tk.Tk):
         self._start_session(self.session.target)
 
     def _start_session(self, phrase: str) -> None:
-        self.session = TypingSession(phrase, strict=self.strict,
-                                     equivalents=EQUIVALENTS[self.lang])
+        self.session = TypingSession(
+            phrase, strict=self.strict, equivalents=EQUIVALENTS[self.lang],
+            time_limit=self.length.amount if self.length.timed else None)
         self._paused_shown = False
         self._stashed_result = None          # итог старой фразы не возвращаем
         if self._notice_kind == "input":
@@ -705,7 +769,7 @@ class TypingApp(tk.Tk):
     def _record_key(self) -> str:
         """Рекорды раздельны по языку, режиму и опциям текста: урок на трёх
         буквах, обычный текст и текст со знаками — разные дисциплины (A-14)."""
-        key = f"{self.lang}/{self.mode.value}"
+        key = f"{self.lang}/{self.mode.value}/{self.length.key}"
         if self.source.decorates:
             key += f"/{self.options.key}"
         return key
@@ -732,9 +796,12 @@ class TypingApp(tk.Tk):
         lines = wrap_words(phrase, avail, measure) if avail > 0 else [phrase]
 
         spans: list[tuple[str, str]] = []
+        rows: list[int] = []
         for row, line in enumerate(lines, start=1):
             spans.extend((f"{row}.{col}", f"{row}.{col + 1}") for col in range(len(line)))
-        self._lines, self._spans = lines, spans
+            rows.extend([row] * len(line))
+        self._lines, self._spans, self._rows = lines, spans, rows
+        self._view_top = 1
         self._caret_pos = None
         self._text_width = width
 
@@ -759,11 +826,17 @@ class TypingApp(tk.Tk):
         if session is None:
             return
         self._render_target(session.target)
-        for pos, mark in enumerate(session.marks):
-            if mark is Mark.CORRECT:
-                self.text.tag_add("ok", *self._spans[pos])
-            elif mark is Mark.WRONG:
-                self.text.tag_add("bad", *self._spans[pos])
+        # Подряд идущие одинаковые отметки — одним tag_add: в тесте на две
+        # минуты это тысячи позиций, по одной было бы заметно медленно.
+        spans, marks = self._spans, session.marks
+        start = 0
+        for pos in range(1, len(marks) + 1):
+            if pos < len(marks) and marks[pos] is marks[start]:
+                continue
+            tag = {Mark.CORRECT: "ok", Mark.WRONG: "bad"}.get(marks[start])
+            if tag:
+                self.text.tag_add(tag, spans[start][0], spans[pos - 1][1])
+            start = pos
         self._place_caret()
 
     def _place_caret(self) -> None:
@@ -779,6 +852,15 @@ class TypingApp(tk.Tk):
             self._caret_tag = "caret_bad" if session.marks[pos] is Mark.WRONG else "caret"
             self.text.tag_add(self._caret_tag, *self._spans[pos])
             self._caret_pos = pos
+            self._scroll_to_row(self._rows[pos])
+
+    def _scroll_to_row(self, row: int) -> None:
+        """Длинный текст видно по VISIBLE_LINES строк: строка с кареткой —
+        вторая сверху, над ней — только что набранная."""
+        top = max(1, min(row - 1, len(self._lines) - VISIBLE_LINES + 1))
+        if top != self._view_top:
+            self._view_top = top
+            self.text.yview(f"{top}.0")
 
     def _fit_text_height(self) -> None:
         """Подогнать высоту поля под реальное число строк.
@@ -796,7 +878,7 @@ class TypingApp(tk.Tk):
         if isinstance(lines, tuple):
             lines = lines[0] if lines else None
         if lines:
-            self.text.configure(height=max(1, min(int(lines), 8)))
+            self.text.configure(height=max(1, min(int(lines), VISIBLE_LINES)))
 
     def _on_text_configure(self, event: tk.Event) -> None:
         # Перерисовываем только при смене ширины: изменение высоты — наших же
@@ -897,6 +979,11 @@ class TypingApp(tk.Tk):
         session = self.session
         if session is None or session.finished or not session.started:
             return  # тест не идёт — таймер не перезапускаем, очередь пустеет
+        if session.check_timeout():
+            self._place_caret()          # каретка уходит: тест окончен
+            self._update_next_key()
+            self._finish()
+            return
         if session.is_idle():
             # Простой: время в движке уже стоит, тикать незачем. Таймер
             # проснётся со следующим нажатием (см. _apply).
@@ -966,6 +1053,15 @@ class TypingApp(tk.Tk):
             "acc": theme.accuracy_color(m.accuracy),
             "err": theme.BAD if m.errors else theme.TEXT,
         }
+        remaining = session.remaining()
+        if remaining is not None:
+            values["extra"] = str(math.ceil(remaining))
+            if remaining <= 5 and session.started and not session.finished:
+                colors["extra"] = theme.WARN
+        elif self.length.kind == "words":
+            target = session.target
+            done = len(target.split()) if session.finished else target.count(" ", 0, session.pos)
+            values["extra"] = f"{done}/{len(target.split())}"
         for key, text in values.items():
             color = colors.get(key, theme.TEXT)
             cached = self._stat_cache.get(key)
@@ -1166,7 +1262,7 @@ class TypingApp(tk.Tk):
         small_labels = kh >= self.px(24)
         # В сжатой клавиатуре (пять рядов в маленьком окне) подпись обычным
         # кеглем выше самой клавиши — берём мелкий.
-        label_font = self.f_key if kh >= self.px(22) else self.f_key_small
+        label_font = self.f_key if kh >= self.px(19) else self.f_key_small
 
         for r, row in enumerate(rows):
             widths = [u * kw + (u - 1) * gap for _, _, u, _ in row]
@@ -1277,7 +1373,7 @@ class TypingApp(tk.Tk):
         self._refresh_hint()
         # Без клавиатуры может хватить обычной плотности: прежняя оценка
         # экономии учитывала клавиатуру, поэтому сбрасываем её.
-        self._compact_saving = 0
+        self._nontext_saving = 0
         self._check_fit()
 
     def toggle_help(self) -> None:
@@ -1323,9 +1419,64 @@ class TypingApp(tk.Tk):
                 chip.pack_forget()
         self.source.lang, self.source.mode, self.source.stage = self.lang, self.mode, self.stage
         self.source.options = self.options
+        self.length_var.set(f"{self.length.title} ▾")
+        if hasattr(self, "_extra_caption"):
+            self._refresh_extra_tile()
         self._refresh_option_chips()
         self._refresh_session_line()
         self._sync_keyboard_kind()
+
+    def _refresh_extra_tile(self) -> None:
+        """Шестая плитка: обратный отсчёт или счётчик слов; во фразе её нет."""
+        caption = {"time": "ОСТАЛОСЬ, С", "words": "СЛОВА"}.get(self.length.kind)
+        tile, row = self.stat_tiles[-1], self._stats_row
+        col = 2 * (len(self.stat_tiles) - 1)
+        if caption:
+            self._extra_caption.configure(text=caption)
+            if not self._extra_shown:
+                tile.grid()
+                row.columnconfigure(col, weight=1, uniform="tile")
+                row.columnconfigure(col - 1, minsize=self.px(8))
+                self._extra_shown = True
+        elif self._extra_shown:
+            # Пустая колонка из группы uniform всё равно заняла бы место.
+            tile.grid_remove()
+            row.columnconfigure(col, weight=0, uniform="")
+            row.columnconfigure(col - 1, minsize=0)
+            self._extra_shown = False
+        self._stat_cache.pop("extra", None)
+
+    def _show_length_menu(self, _event=None) -> None:
+        """Выпадающий список длины теста под чипом."""
+        menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_HI, fg=theme.TEXT,
+                       activebackground=theme.ACCENT, activeforeground="#ffffff",
+                       selectcolor=theme.ACCENT, font=self.f_hint, borderwidth=0)
+        self._length_choice = tk.StringVar(value=self.length.key)
+        kind = None
+        for length in LENGTHS:
+            if kind is not None and length.kind != kind:
+                menu.add_separator()
+            kind = length.kind
+            label = {"phrase": "одна фраза",
+                     "words": f"{length.amount} слов",
+                     "time": f"{length.amount} секунд"}[length.kind]
+            menu.add_radiobutton(label=label, variable=self._length_choice,
+                                 value=length.key,
+                                 command=lambda chosen=length: self.set_length(chosen))
+        chip = self._length_chip
+        try:
+            menu.tk_popup(chip.winfo_rootx(), chip.winfo_rooty() + chip.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def set_length(self, length: Length) -> None:
+        self.length = length
+        self._refresh_chips()
+        self.new_test()
+
+    def cycle_length(self, step: int = 1) -> None:
+        idx = LENGTHS.index(self.length) if self.length in LENGTHS else 0
+        self.set_length(LENGTHS[(idx + step) % len(LENGTHS)])
 
     def _refresh_option_chips(self) -> None:
         """Опции текста: подсвечены включённые; в уроках их нет вовсе."""
@@ -1346,7 +1497,7 @@ class TypingApp(tk.Tk):
         if self._kb_full_drawn is None or self._kb_full_drawn == self._kb_full:
             return
         self.kb_canvas.configure(height=self._kb_height())
-        self._compact_saving = 0          # прежняя оценка была для другой высоты
+        self._nontext_saving = 0          # прежняя оценка была для другой высоты
         self._layout_keyboard()
 
     def _set_options(self, **changes: bool) -> None:
@@ -1384,6 +1535,7 @@ class TypingApp(tk.Tk):
             "stage": self.stage,
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
+            "length": self.length.key,
             "caps": self.options.caps,
             "punct": self.options.punct,
             "digits": self.options.digits,

@@ -420,3 +420,50 @@ def test_recent_keystrokes_outweigh_old_ones():
     p.absorb(finished_session("б" * 30, 0.6), "k")          # медленно
     p.absorb(finished_session("б" * 30, 0.2), "k")          # быстро
     assert p.key_speed["б"] > (100 + 300) / 2               # ближе к свежему
+
+
+# ------------------------------------------------------------ тест на время
+
+def test_timed_session_stops_exactly_at_the_limit():
+    clock = FakeClock()
+    s = TypingSession("а" * 100, clock=clock, time_limit=2.0)
+    for moment in (0.0, 0.5, 1.0, 1.5, 1.9):    # пять нажатий внутри лимита
+        clock.now = moment
+        assert not s.type_char("а").finished
+    clock.now = 2.1                              # лимит уже набран
+    effect = s.type_char("а")
+    assert effect.finished and s.finished and s.timed_out
+    assert s.elapsed() == pytest.approx(2.0)    # ровно лимит, не момент проверки
+    assert s.keystrokes == 5                    # опоздавшее нажатие не в счёт
+
+
+def test_timeout_is_found_by_polling():
+    clock = FakeClock()
+    s = TypingSession("а" * 100, clock=clock, time_limit=1.0)
+    s.type_char("а")
+    clock.advance(0.7)
+    assert not s.check_timeout()
+    assert s.remaining() == pytest.approx(0.3)
+    clock.advance(0.31)
+    assert s.check_timeout()
+    assert s.remaining() == 0
+    assert not s.check_timeout()                # повторно — уже закончен
+
+
+def test_pause_does_not_eat_the_time_limit():
+    """Отошёл посреди теста на минуту — время теста стоит."""
+    clock = FakeClock()
+    s = TypingSession("а" * 100, clock=clock, time_limit=10.0)
+    s.type_char("а")
+    clock.advance(600)
+    assert not s.check_timeout()
+    assert s.remaining() == pytest.approx(10.0 - IDLE_GAP)
+
+
+def test_untimed_session_never_times_out():
+    clock = FakeClock()
+    s = TypingSession("аб", clock=clock)
+    s.type_char("а")
+    clock.advance(1000)
+    assert not s.check_timeout()
+    assert s.remaining() is None
