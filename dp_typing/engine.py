@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Callable
@@ -26,6 +27,12 @@ CHARS_PER_WORD = 5
 #: Сколько раз символ должен встретиться, прежде чем считать его статистику
 #: значимой для адаптивного режима.
 MIN_SAMPLES_FOR_WEAKNESS = 4
+
+#: Простой дольше этого не считается временем набора: таймер «засыпает» через
+#: столько секунд без нажатий и просыпается со следующим. Иначе телефонный
+#: звонок посреди фразы обваливал её скорость, а брошенная фраза при выходе
+#: приносила в профиль часы «печати».
+IDLE_GAP = 5.0
 
 
 class Mark(IntEnum):
@@ -84,20 +91,26 @@ class TypingSession:
     Часы инжектируются (``clock``), чтобы тесты были детерминированными.
     По умолчанию — ``time.perf_counter``: монотонный, в отличие от
     ``time.time``, который может прыгнуть при синхронизации по NTP.
+
+    ``equivalents`` — какие нажатия засчитываются вместо символа цели:
+    ``{"ё": "е"}`` разрешает печатать «е» там, где в слове «ё».
     """
 
     __slots__ = (
         "_clock",
+        "_last_at",
         "best_combo",
         "char_errors",
         "char_total",
         "combo",
         "correct_chars",
         "corrections",
+        "equivalents",
         "errors",
         "finished_at",
         "keystrokes",
         "marks",
+        "paused",
         "pos",
         "started_at",
         "strict",
@@ -110,12 +123,14 @@ class TypingSession:
         *,
         strict: bool = False,
         clock: Callable[[], float] = time.perf_counter,
+        equivalents: Mapping[str, str] | None = None,
     ) -> None:
         if not target:
             raise ValueError("target не может быть пустым")
         self.target = target
         self.strict = strict
         self._clock = clock
+        self.equivalents: dict[str, str] = dict(equivalents or {})
         self.marks: list[Mark] = [Mark.PENDING] * len(target)
         self.pos = 0
         self.keystrokes = 0
@@ -126,6 +141,9 @@ class TypingSession:
         self.best_combo = 0
         self.started_at: float | None = None
         self.finished_at: float | None = None
+        self._last_at = 0.0
+        #: Сумма простоев сверх IDLE_GAP — вычитается из времени набора.
+        self.paused = 0.0
         # Посимвольная статистика — основа адаптивного подбора слов.
         self.char_total: Counter[str] = Counter()
         self.char_errors: Counter[str] = Counter()
@@ -145,14 +163,16 @@ class TypingSession:
         if self.finished or len(ch) != 1:
             return _IGNORED
 
-        started = False
-        if self.started_at is None:
-            self.started_at = self._clock()
-            started = True
+        now = self._clock()
+        started = self.started_at is None
+        if started:
+            self.started_at = self._last_at = now
+        else:
+            self._note_activity(now)
 
         idx = self.pos
         expected = self.target[idx]
-        correct = ch == expected
+        correct = ch == expected or ch in self.equivalents.get(expected, "")
 
         self.keystrokes += 1
         self.char_total[expected] += 1
@@ -178,7 +198,7 @@ class TypingSession:
 
         finished = self.pos >= len(self.target)
         if finished:
-            self.finished_at = self._clock()
+            self.finished_at = now
 
         return KeyEffect(
             accepted=True,
@@ -190,10 +210,19 @@ class TypingSession:
             started=started,
         )
 
+    def _note_activity(self, now: float) -> None:
+        """Учесть нажатие: простой сверх IDLE_GAP уходит в паузу."""
+        gap = now - self._last_at
+        if gap > IDLE_GAP:
+            self.paused += gap - IDLE_GAP
+        self._last_at = now
+
     def backspace(self) -> KeyEffect:
         """Стереть один символ назад."""
         if self.finished:
             return _IGNORED
+        if self.started_at is not None:
+            self._note_activity(self._clock())
 
         # Строгий режим: на текущей позиции висит непринятая ошибка — гасим её,
         # курсор при этом не двигаем.
@@ -223,12 +252,22 @@ class TypingSession:
     # --------------------------------------------------------------- метрики
 
     def elapsed(self, now: float | None = None) -> float:
+        """Время набора без простоев (см. IDLE_GAP)."""
         if self.started_at is None:
             return 0.0
         end = self.finished_at
+        idle = 0.0
         if end is None:
             end = self._clock() if now is None else now
-        return max(end - self.started_at, 0.0)
+            idle = max(end - self._last_at - IDLE_GAP, 0.0)  # идущий сейчас простой
+        return max(end - self.started_at - self.paused - idle, 0.0)
+
+    def is_idle(self, now: float | None = None) -> bool:
+        """Тест начат, не закончен, и нажатий не было дольше IDLE_GAP."""
+        if self.started_at is None or self.finished_at is not None:
+            return False
+        now = self._clock() if now is None else now
+        return now - self._last_at > IDLE_GAP
 
     def metrics(self, now: float | None = None) -> Metrics:
         elapsed = self.elapsed(now)
@@ -283,12 +322,20 @@ class Profile:
         self.best_combo = 0
         self.best_wpm = 0.0
 
-    def absorb(self, session: TypingSession) -> None:
-        """Влить результаты завершённого (или прерванного) теста."""
-        if session.keystrokes == 0:
-            return
+    def absorb_keys(self, session: TypingSession) -> None:
+        """Влить только посимвольную статистику — для брошенной фразы.
+
+        Пропущенная (Esc) или недобранная фраза не засчитывается как тест и не
+        влияет на скорость, но её ошибки — ценные данные для слабых клавиш.
+        """
         self.char_total.update(session.char_total)
         self.char_errors.update(session.char_errors)
+
+    def absorb(self, session: TypingSession) -> None:
+        """Влить результаты теста целиком."""
+        if session.keystrokes == 0:
+            return
+        self.absorb_keys(session)
         self.tests += 1
         self.total_keystrokes += session.keystrokes
         self.total_errors += session.errors

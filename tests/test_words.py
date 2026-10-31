@@ -4,6 +4,7 @@ import random
 
 import pytest
 
+from dp_typing.layout import EQUIVALENTS
 from dp_typing.words import (
     MAX_WORD_LEN,
     MIN_WORD_LEN,
@@ -84,8 +85,18 @@ def test_lesson_phrase_stays_inside_its_zone(lang, rng):
     """Урок не имеет права подсунуть клавишу, которую ещё не проходили."""
     for stage, (_title, keys) in enumerate(lesson_stages(lang)):
         source = TextSource(lang, Mode.LESSON, stage=stage, rng=rng)
-        used = set(source.phrase(40).replace(" ", ""))
+        # «ё» засчитывается нажатием «е», поэтому сворачиваем эквиваленты.
+        folds = {ch: alts[0] for ch, alts in EQUIVALENTS[lang].items()}
+        used = {folds.get(ch, ch) for ch in source.phrase(40).replace(" ", "")}
         assert used <= set(keys), f"ступень {stage}: лишние клавиши {used - set(keys)}"
+
+
+def test_yo_words_reach_lessons_through_e():
+    """Слово с «ё» годится для зоны с «е»: печатать его можно через «е»."""
+    zone = "".join(sorted(set("ещёвсё") - {"ё"}))
+    pool = words_for_zone("ru", zone)
+    assert "ещё" in pool and "всё" in pool
+    assert words_for_zone("ru", "щв") == ()       # без «е» — нельзя
 
 
 def test_zone_words_are_filtered_correctly():

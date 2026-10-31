@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from enum import Enum
 from functools import lru_cache
 
-from .layout import LAYOUTS
+from .layout import EQUIVALENTS, LAYOUTS
 
 MIN_WORD_LEN = 2
 MAX_WORD_LEN = 12
@@ -119,9 +119,21 @@ def lesson_stages(lang: str) -> tuple[tuple[str, str], ...]:
 
 @lru_cache(maxsize=32)
 def words_for_zone(lang: str, allowed: str) -> tuple[str, ...]:
-    """Слова, целиком укладывающиеся в заданный набор клавиш."""
+    """Слова, целиком укладывающиеся в заданный набор клавиш.
+
+    Символ с эквивалентом считается доступным, если доступен эквивалент:
+    слово «ещё» годится для зоны с «е», ведь «е» засчитывается вместо «ё».
+    """
     zone = set(allowed)
-    return tuple(w for w in load_words(lang) if zone.issuperset(w))
+    alternatives = EQUIVALENTS.get(lang, {})
+
+    def fits(word: str) -> bool:
+        return all(
+            ch in zone or any(alt in zone for alt in alternatives.get(ch, ""))
+            for ch in word
+        )
+
+    return tuple(w for w in load_words(lang) if fits(w))
 
 
 def _synthetic_zone_words(allowed: str, rng: random.Random, count: int) -> list[str]:

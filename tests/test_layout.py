@@ -3,13 +3,19 @@
 import pytest
 
 from dp_typing.layout import (
+    CAPS_LOCK,
+    CAPS_LOCK_MASK,
     FINGER_NAMES,
     FINGERS,
     LAYOUTS,
     LEFT_INDEX,
+    LEFT_PINKY,
     RIGHT_INDEX,
     THUMB,
+    WRONG_LAYOUT,
+    alphabet_of,
     finger_for,
+    input_problem,
     key_zone,
 )
 
@@ -53,3 +59,42 @@ def test_unknown_symbols_have_no_finger():
 def test_key_zone_filters_to_layout():
     assert key_zone("en", "asdf!!") == set("asdf")
     assert key_zone("xx", "asdf") == set()
+
+
+# --------------------------------------------------------------------- ё
+
+def test_yo_key_is_on_the_keyboard_with_a_finger():
+    ru = LAYOUTS["ru"]
+    assert ru.display_rows[0].startswith("ё")
+    assert "ё" not in ru.top                  # верхний ряд уроков не меняется
+    assert finger_for("ru", "ё") == LEFT_PINKY
+    assert finger_for("ru", "Ё") == LEFT_PINKY
+
+
+# ------------------------------------------------- раскладка ОС и Caps Lock
+
+def test_alphabet_detection():
+    assert alphabet_of("g") == alphabet_of("G") == "en"
+    assert alphabet_of("п") == alphabet_of("Ё") == "ru"
+    assert alphabet_of(".") is None
+    assert alphabet_of("1") is None
+
+
+def test_wrong_system_layout_is_recognised():
+    """«ghbdtn» вместо «привет» — включена английская раскладка."""
+    assert input_problem("ru", "g", "п") == WRONG_LAYOUT
+    assert input_problem("en", "п", "g") == WRONG_LAYOUT
+
+
+def test_caps_lock_is_recognised():
+    assert input_problem("ru", "П", "п") == CAPS_LOCK                    # по регистру
+    assert input_problem("ru", "К", "п", CAPS_LOCK_MASK) == CAPS_LOCK    # по биту
+    assert input_problem("en", "G", "g") == CAPS_LOCK
+
+
+def test_ordinary_typos_are_not_blamed_on_the_system():
+    assert input_problem("ru", "к", "п") is None
+    assert input_problem("ru", "п", "п") is None
+    assert input_problem("ru", "п", "п", CAPS_LOCK_MASK) is None   # Caps+Shift
+    assert input_problem("ru", ".", "п") is None
+    assert input_problem("ru", " ", "п") is None
