@@ -10,8 +10,10 @@ from dp_typing.words import (
     MIN_PSEUDO_LEN,
     MIN_WORD_LEN,
     Mode,
+    TextOptions,
     TextSource,
     adaptive_weights,
+    decorate,
     lesson_stages,
     load_words,
     pseudo_word,
@@ -182,3 +184,68 @@ def test_generated_phrases_stay_clean(lang, rng):
     """Псевдослова строятся на словаре, но проверим и их выдачу."""
     words = set(TextSource(lang, Mode.COMMON, rng=rng).phrase(2000).split())
     assert not (PROFANITY[lang] & words)
+
+
+# ------------------------------------------- заглавные, знаки, цифры (A-27)
+
+ALL_ON = TextOptions(caps=True, punct=True, digits=True)
+
+
+def test_plain_options_leave_words_alone(rng):
+    words = ["кот", "пёс", "дом"]
+    assert decorate(words, rng, TextOptions()) == words
+
+
+@pytest.mark.parametrize("options", [
+    TextOptions(caps=True), TextOptions(punct=True), TextOptions(digits=True), ALL_ON,
+])
+def test_decoration_keeps_the_word_count(rng, options):
+    """Тест «на 25 слов» обязан остаться тестом на 25 слов."""
+    words = list(load_words("ru")[:300])
+    rng.shuffle(words)
+    out = decorate(words[:50], rng, options)
+    joined = " ".join(out)
+    assert len(joined.split()) == 50 + joined.count(" -")  # тире — отдельный «знак»
+
+
+def test_caps_start_sentences(rng):
+    out = decorate(["один", "два", "три"], rng, TextOptions(caps=True))
+    assert out[0] == "Один"
+
+
+def test_punctuation_ends_sentences_and_capitalises_after(rng):
+    text = " ".join(decorate(["слово"] * 200, rng, TextOptions(caps=True, punct=True)))
+    assert text[-1] in ".!?"
+    assert "," in text and "." in text
+    sentences = [s.strip() for s in text.replace("!", ".").replace("?", ".").split(".") if s]
+    starts = [s.lstrip('("') for s in sentences]
+    assert all(s[0].isupper() for s in starts if s and s[0].isalpha())
+
+
+def test_digits_appear_and_are_typeable(rng):
+    text = " ".join(decorate(["слово"] * 200, rng, TextOptions(digits=True)))
+    assert any(ch.isdigit() for ch in text)
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+def test_decorated_text_is_typeable_on_the_layout(lang, rng):
+    """Всё, что генерируется, должно набираться на раскладке без её смены."""
+    from dp_typing.layout import stroke_for
+
+    source = TextSource(lang, Mode.COMMON, rng=rng, options=ALL_ON)
+    text = " ".join(source.phrase(40) for _ in range(20))
+    missing = {ch for ch in text if stroke_for(lang, ch) is None}
+    assert not missing, f"не набрать на {lang}: {missing}"
+
+
+def test_lessons_ignore_text_options(rng):
+    source = TextSource("ru", Mode.LESSON, stage=1, rng=rng, options=ALL_ON)
+    phrase = source.phrase(30)
+    assert phrase == phrase.lower()
+    assert not any(ch in phrase for ch in ".,!?0123456789")
+
+
+def test_options_key_is_stable():
+    assert TextOptions().key == ""
+    assert ALL_ON.key == "A.1"
+    assert TextOptions(punct=True).key == "."

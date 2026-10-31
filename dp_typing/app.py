@@ -36,13 +36,13 @@ from .layout import (
     FINGER_NAMES,
     LAYOUTS,
     WRONG_LAYOUT,
-    finger_for,
     input_problem,
+    stroke_for,
 )
 from .storage import load as load_profile
 from .storage import restore as restore_profile
 from .storage import save as save_profile
-from .words import Mode, TextSource, lesson_stages
+from .words import Mode, TextOptions, TextSource, lesson_stages
 
 #: Период обновления метрик во время теста, мс.
 TICK_MS = 200
@@ -72,6 +72,9 @@ BODY_PADY = 14
 TEXT_PADX = 28
 #: Ниже этой высоты холста клавиши стали бы нечитаемыми (4 ряда по ~13 px).
 KB_MIN_H = 64
+#: Ширина клавиш в «обычных» клавишах: Shift и пробел.
+SHIFT_UNITS = 2.2
+SPACE_UNITS = 7
 
 #: Цвета плашки-уведомления: фон и текст.
 NOTICE_COLORS = {
@@ -93,6 +96,7 @@ class Density:
     result: int
     combo_h: int         # высота холста комбо, px
     kb_h: int            # высота холста клавиатуры, px
+    kb_extra: int        # добавка, когда на клавиатуре ряд цифр и Shift
     text_pady: int
     line_above: int      # spacing1 у Text: воздух над строкой
     line_below: int      # spacing3 у Text: воздух под строкой
@@ -104,16 +108,16 @@ class Density:
         """Та же плотность для экрана в ``k`` раз плотнее 96 dpi."""
         if k == 1:
             return self
-        pixels = ("combo_h", "kb_h", "text_pady", "line_above", "line_below",
+        pixels = ("combo_h", "kb_h", "kb_extra", "text_pady", "line_above", "line_below",
                   "result_pady", "tile_pady", "gap")
         return replace(self, **{name: round(getattr(self, name) * k) for name in pixels})
 
 
 NORMAL = Density(target=22, stat=21, combo=26, combo_big=31, result=13,
-                 combo_h=74, kb_h=150, text_pady=24, line_above=6, line_below=10,
+                 combo_h=74, kb_h=150, kb_extra=34, text_pady=24, line_above=6, line_below=10,
                  result_pady=16, tile_pady=10, gap=12)
 COMPACT = Density(target=18, stat=16, combo=20, combo_big=24, result=12,
-                  combo_h=56, kb_h=100, text_pady=12, line_above=3, line_below=6,
+                  combo_h=56, kb_h=100, kb_extra=22, text_pady=12, line_above=3, line_below=6,
                   result_pady=8, tile_pady=5, gap=5)
 
 
@@ -154,8 +158,11 @@ class TypingApp(tk.Tk):
         self.stage: int = int(saved.get("stage", 0) or 0)
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
+        self.options = TextOptions(caps=bool(saved.get("caps", False)),
+                                   punct=bool(saved.get("punct", False)),
+                                   digits=bool(saved.get("digits", False)))
 
-        self.source = TextSource(self.lang, self.mode, self.stage, self.rng)
+        self.source = TextSource(self.lang, self.mode, self.stage, self.rng, self.options)
         self.session: TypingSession | None = None
 
         # ---- идентификаторы отложенных задач; None означает «в очереди пусто»
@@ -169,8 +176,11 @@ class TypingApp(tk.Tk):
         self._fade_cache: dict[tuple[str, str], tuple[str, ...]] = {}
         self._stat_cache: dict[str, tuple] = {}
         self._kb_items: dict[str, tuple[int, int]] = {}
+        self._kb_small: dict[str, int] = {}       # мелкие подписи «что под Shift»
         self._kb_size = (0, 0)
+        self._kb_full_drawn: bool | None = None
         self._hot_key: str | None = None
+        self._hot_shift: str | None = None
         # Ширины холстов кэшируются: winfo_width() — обращение к Tk, а в
         # горячем пути оно вызывалось на каждое нажатие.
         self._combo_w = 0
@@ -252,6 +262,7 @@ class TypingApp(tk.Tk):
         self.f_combo = tkfont.Font(family=ui, size=d.combo, weight="bold")
         self.f_combo_big = tkfont.Font(family=ui, size=d.combo_big, weight="bold")
         self.f_key = tkfont.Font(family=mono, size=10)
+        self.f_key_small = tkfont.Font(family=mono, size=7)
         self.f_result = tkfont.Font(family=ui, size=d.result, weight="bold")
 
     def _build_ui(self) -> None:
@@ -295,12 +306,25 @@ class TypingApp(tk.Tk):
             chip.bind("<Button-1>", lambda _e, c=cmd: c())
             self._chips.append(chip)
 
-        # Итоги за всё время — отдельной строкой: в один ряд с чипами они не
-        # влезали и обрезали название ступени.
+        # Вторая строка: слева — опции текста, справа — итоги за всё время
+        # (в один ряд с чипами режима они не влезали и обрезали ступень).
+        self._options_bar = tk.Frame(parent, bg=theme.BG)
+        self._options_bar.pack(fill="x")
+        self._option_box = tk.Frame(self._options_bar, bg=theme.BG)
+        self._option_chips: dict[str, tk.Label] = {}
+        for name, text, cmd in (("caps", "Аа", self.toggle_caps),
+                                ("punct", "!?", self.toggle_punct),
+                                ("digits", "123", self.toggle_digits)):
+            chip = tk.Label(self._option_box, text=text, font=self.f_chip,
+                            padx=self.px(8), pady=self.px(2), cursor="hand2")
+            chip.pack(side="left", padx=(0, self.px(6)))
+            chip.bind("<Button-1>", lambda _e, c=cmd: c())
+            self._option_chips[name] = chip
         self.session_var = tk.StringVar()
-        self._session_label = tk.Label(parent, textvariable=self.session_var, bg=theme.BG,
-                                       fg=theme.TEXT_DIM, font=self.f_hint, anchor="e")
-        self._session_label.pack(fill="x")
+        self._session_label = tk.Label(self._options_bar, textvariable=self.session_var,
+                                       bg=theme.BG, fg=theme.TEXT_DIM, font=self.f_hint,
+                                       anchor="e")
+        self._session_label.pack(side="right")
         self._refresh_chips()
 
     def _build_stats(self, parent: tk.Frame) -> None:
@@ -403,7 +427,7 @@ class TypingApp(tk.Tk):
         # Упаковывается позже, в _pack_keyboard: место в очереди pack должно
         # быть перед подсказками, иначе после F6 клавиатура уезжала под них.
         self.kb_holder = tk.Frame(parent, bg=theme.BG)
-        self.kb_canvas = tk.Canvas(self.kb_holder, height=self.density.kb_h, bg=theme.BG,
+        self.kb_canvas = tk.Canvas(self.kb_holder, height=self._kb_height(), bg=theme.BG,
                                    highlightthickness=0)
         self.kb_canvas.pack(fill="x")
         self.finger_var = tk.StringVar()
@@ -436,6 +460,7 @@ class TypingApp(tk.Tk):
             ("F5", "строгий режим (не пускает дальше при ошибке)"),
             ("F6", "показать / скрыть экранную клавиатуру"),
             ("F7 дважды", "сбросить всю накопленную статистику"),
+            ("F9 / F10 / F11", "заглавные / знаки препинания / цифры"),
             ("F1", "закрыть эту справку"),
             ("Ctrl+Q", "выход"),
         )
@@ -471,7 +496,7 @@ class TypingApp(tk.Tk):
 
         small = max(gap - 2, 2)
         self._header_bar.pack_configure(pady=(0, gap))
-        self._session_label.pack_configure(pady=(0, small))
+        self._options_bar.pack_configure(pady=(0, small))
         self._stats_row.pack_configure(pady=(0, small))
         for value, cap in self._tile_parts:
             value.pack_configure(pady=(d.tile_pady, 0))
@@ -481,7 +506,7 @@ class TypingApp(tk.Tk):
         self.result_label.pack_configure(pady=(0, d.result_pady))
         self.combo_canvas.configure(height=d.combo_h)
         self.combo_canvas.pack_configure(pady=(gap, 0))
-        self.kb_canvas.configure(height=d.kb_h)
+        self.kb_canvas.configure(height=self._kb_height())
         if self.kb_holder.winfo_manager():
             self.kb_holder.pack_configure(pady=(gap // 2, 0))
         self.footer_label.pack_configure(pady=(small, 0))
@@ -511,7 +536,7 @@ class TypingApp(tk.Tk):
             pad = sum(map(int, pady)) if isinstance(pady, (tuple, list)) else 2 * int(pady)
             total += widget.winfo_reqheight() + pad
         if full_keyboard and self.kb_holder.winfo_manager():
-            total += self.density.kb_h - self.kb_canvas.winfo_reqheight()
+            total += self._kb_height() - self.kb_canvas.winfo_reqheight()
         return total
 
     def _check_fit(self) -> None:
@@ -549,7 +574,7 @@ class TypingApp(tk.Tk):
         # отдаём недостающее за счёт клавиатуры — клавиши масштабируются
         # по высоте холста и остаются целиком видны.
         over = self._required_height(full_keyboard=True) - avail
-        kb_h = max(self.px(KB_MIN_H), self.density.kb_h - max(over, 0))
+        kb_h = max(self.px(KB_MIN_H), self._kb_height() - max(over, 0))
         if int(self.kb_canvas.cget("height")) != kb_h:
             self.kb_canvas.configure(height=kb_h)
 
@@ -583,6 +608,9 @@ class TypingApp(tk.Tk):
         self.bind("<F5>", lambda _e: self._action(self.toggle_strict))
         self.bind("<F6>", lambda _e: self._action(self.toggle_keyboard))
         self.bind("<F7>", lambda _e: self._action(self.request_reset))
+        self.bind("<F9>", lambda _e: self._action(self.toggle_caps))
+        self.bind("<F10>", lambda _e: self._action(self.toggle_punct))
+        self.bind("<F11>", lambda _e: self._action(self.toggle_digits))
         self.bind("<Control-q>", lambda _e: self._quit())
 
     @staticmethod
@@ -675,9 +703,12 @@ class TypingApp(tk.Tk):
         self._refresh_hint()
 
     def _record_key(self) -> str:
-        """Рекорды раздельны по языку и режиму: урок на трёх буквах и обычный
-        текст — разные дисциплины (A-14)."""
-        return f"{self.lang}/{self.mode.value}"
+        """Рекорды раздельны по языку, режиму и опциям текста: урок на трёх
+        буквах, обычный текст и текст со знаками — разные дисциплины (A-14)."""
+        key = f"{self.lang}/{self.mode.value}"
+        if self.source.decorates:
+            key += f"/{self.options.key}"
+        return key
 
     def _absorb_abandoned(self) -> None:
         """Брошенная фраза (Esc, Tab, смена режима, выход) не засчитывается как
@@ -1077,83 +1108,125 @@ class TypingApp(tk.Tk):
             self.after_cancel(self._resize_id)
         self._resize_id = self.after(120, self._layout_keyboard)
 
+    @property
+    def _kb_full(self) -> bool:
+        """Полная клавиатура (ряд цифр, знаки, Shift) — когда текст их требует."""
+        return self.source.decorates
+
+    def _kb_height(self) -> int:
+        d = self.density
+        return d.kb_h + (d.kb_extra if self._kb_full else 0)
+
+    def _keyboard_rows(self) -> list[list[tuple[str, str, float, str]]]:
+        """Ряды клавиш: (имя, подпись, ширина в клавишах, мелкая подпись Shift)."""
+        layout = LAYOUTS[self.lang]
+        rows: list[list[tuple[str, str, float, str]]]
+        if not self._kb_full:
+            rows = [[(ch, ch.upper(), 1.0, "") for ch in row] for row in layout.display_rows]
+        else:
+            rows = []
+            for plain, shifted in layout.full:
+                # У букв «что под Shift» очевидно, подписываем только знаки.
+                rows.append([(base, base.upper(), 1.0, "" if up == base.upper() else up)
+                             for base, up in zip(plain, shifted)])
+            rows[-1] = [("shift_left", "SHIFT", SHIFT_UNITS, ""), *rows[-1],
+                        ("shift_right", "SHIFT", SHIFT_UNITS, "")]
+        rows.append([(" ", "ПРОБЕЛ", SPACE_UNITS, "")])
+        return rows
+
     def _layout_keyboard(self) -> None:
-        """Пересобрать клавиши. Вызывается только при смене размера или языка."""
+        """Пересобрать клавиши. Вызывается только при смене размера, языка
+        или состава клавиатуры (опции текста)."""
         self._resize_id = None
         c = self.kb_canvas
         c.delete("all")
         self._kb_items.clear()
-        self._hot_key = None
+        self._kb_small.clear()
+        self._hot_key = self._hot_shift = None
+        self._kb_full_drawn = self._kb_full
 
         layout = LAYOUTS[self.lang]
-        rows = layout.display_rows
+        rows = self._keyboard_rows()
         width, height = c.winfo_width(), c.winfo_height()
         if width <= 1 or height <= 1:
             return
-        longest = max(len(r) for r in rows)
         gap = self.px(4)
-        kw = min(self.px(46), (width - self.px(40) - gap * longest) / longest)
-        # Четыре ряда (три буквенных + пробел) обязаны уместиться по высоте:
-        # раньше высота клавиш считалась только от ширины, и в низком окне
-        # верхний ряд и пробел уходили за край холста.
-        kh = min(self.px(34), kw, (height - 3 * gap - self.px(2)) / 4)
+        # Ширина «обычной» клавиши — по самому широкому ряду.
+        kw = min(
+            (width - self.px(40) - gap * (len(row) - 1)) / sum(u for _, _, u, _ in row)
+            for row in rows
+        )
+        kw = min(self.px(46), kw)
+        # Все ряды обязаны уместиться по высоте: раньше высота клавиш считалась
+        # только от ширины, и в низком окне верхний ряд уходил за край холста.
+        kh = min(self.px(34), kw, (height - (len(rows) - 1) * gap - self.px(2)) / len(rows))
         if kw < self.px(12) or kh < self.px(10):
             return
-        total_h = kh * 4 + gap * 3  # три ряда + пробел
-        top = max((height - total_h) / 2, 0)
+        top = max((height - (kh * len(rows) + gap * (len(rows) - 1))) / 2, 0)
+        small_labels = kh >= self.px(24)
+        # В сжатой клавиатуре (пять рядов в маленьком окне) подпись обычным
+        # кеглем выше самой клавиши — берём мелкий.
+        label_font = self.f_key if kh >= self.px(22) else self.f_key_small
 
         for r, row in enumerate(rows):
-            row_w = len(row) * (kw + gap) - gap
-            x0 = (width - row_w) / 2
-            y0 = top + r * (kh + gap)
-            for i, ch in enumerate(row):
-                x = x0 + i * (kw + gap)
-                base_bg = theme.KEY_HOME_BG if ch in layout.anchors else theme.KEY_BG
-                rect = c.create_rectangle(x, y0, x + kw, y0 + kh, fill=base_bg, width=0)
-                label = c.create_text(x + kw / 2, y0 + kh / 2, text=ch.upper(),
-                                      fill=theme.KEY_FG, font=self.f_key)
-                self._kb_items[ch] = (rect, label)
-
-        # Пробел отдельным широким блоком.
-        sw = kw * 7
-        x = (width - sw) / 2
-        y = top + 3 * (kh + gap)
-        rect = c.create_rectangle(x, y, x + sw, y + kh, fill=theme.KEY_BG, width=0)
-        label = c.create_text(x + sw / 2, y + kh / 2, text="ПРОБЕЛ",
-                              fill=theme.KEY_FG, font=self.f_key)
-        self._kb_items[" "] = (rect, label)
+            widths = [u * kw + (u - 1) * gap for _, _, u, _ in row]
+            x = (width - sum(widths) - gap * (len(row) - 1)) / 2
+            y = top + r * (kh + gap)
+            for (name, text, _, small), w in zip(row, widths):
+                base_bg = theme.KEY_HOME_BG if name in layout.anchors else theme.KEY_BG
+                rect = c.create_rectangle(x, y, x + w, y + kh, fill=base_bg, width=0)
+                label = c.create_text(x + w / 2, y + kh / 2, text=text,
+                                      fill=theme.KEY_FG, font=label_font)
+                self._kb_items[name] = (rect, label)
+                if small and small_labels:
+                    self._kb_small[name] = c.create_text(
+                        x + self.px(3), y + self.px(1), text=small, anchor="nw",
+                        fill=theme.TEXT_FAINT, font=self.f_key_small)
+                x += w + gap
         self._update_next_key()
 
+    def _paint_key(self, name: str | None, hot: bool) -> None:
+        if name is None or name not in self._kb_items:
+            return
+        rect, label = self._kb_items[name]
+        if hot:
+            bg, fg, small = theme.KEY_NEXT_BG, theme.KEY_NEXT_FG, theme.KEY_NEXT_FG
+        else:
+            bg = theme.KEY_HOME_BG if name in LAYOUTS[self.lang].anchors else theme.KEY_BG
+            fg, small = theme.KEY_FG, theme.TEXT_FAINT
+        self.kb_canvas.itemconfigure(rect, fill=bg)
+        self.kb_canvas.itemconfigure(label, fill=fg)
+        if name in self._kb_small:
+            self.kb_canvas.itemconfigure(self._kb_small[name], fill=small)
+
     def _update_next_key(self) -> None:
-        """Подсветить следующую клавишу: два itemconfigure, без перерисовки."""
+        """Подсветить следующую клавишу (и Shift другой рукой, если нужен)."""
         if not self.show_keyboard or not self._kb_items:
             return
         session = self.session
-        nxt = None
+        ch = None
         if session and not session.finished and session.pos < len(session.target):
-            nxt = session.target[session.pos].lower()
+            ch = session.target[session.pos]
+        stroke = stroke_for(self.lang, ch) if ch else None
+        key = stroke.key if stroke else (ch.lower() if ch else None)
+        shift = f"shift_{stroke.shift_side}" if stroke and stroke.shift_side else None
 
-        if nxt == self._hot_key:
+        if (key, shift) == (self._hot_key, self._hot_shift):
             return
-        layout = LAYOUTS[self.lang]
-        if self._hot_key is not None and self._hot_key in self._kb_items:
-            rect, label = self._kb_items[self._hot_key]
-            base_bg = theme.KEY_HOME_BG if self._hot_key in layout.anchors else theme.KEY_BG
-            self.kb_canvas.itemconfigure(rect, fill=base_bg)
-            self.kb_canvas.itemconfigure(label, fill=theme.KEY_FG)
-        self._hot_key = nxt
-        if nxt and nxt in self._kb_items:
-            rect, label = self._kb_items[nxt]
-            self.kb_canvas.itemconfigure(rect, fill=theme.KEY_NEXT_BG)
-            self.kb_canvas.itemconfigure(label, fill=theme.KEY_NEXT_FG)
-            finger = finger_for(self.lang, nxt)
-            hint = FINGER_NAMES[finger] if finger is not None else ""
-            alternative = EQUIVALENTS[self.lang].get(nxt)
-            if hint and alternative:
-                hint += f" · можно и «{alternative}»"
-            self.finger_var.set(hint)
-        else:
-            self.finger_var.set("")
+        self._paint_key(self._hot_key, False)
+        self._paint_key(self._hot_shift, False)
+        self._hot_key, self._hot_shift = key, shift
+        self._paint_key(key, True)
+        self._paint_key(shift, True)
+
+        hint = FINGER_NAMES[stroke.finger] if stroke else ""
+        if stroke and stroke.shift_side:
+            hand = "правой" if stroke.shift_side == "right" else "левой"
+            hint += f" + Shift {hand} рукой"
+        alternative = EQUIVALENTS[self.lang].get(ch) if ch else None
+        if hint and alternative:
+            hint += f" · можно и «{alternative}»"
+        self.finger_var.set(hint)
 
     # ---------------------------------------------------------------- команды
 
@@ -1249,7 +1322,46 @@ class TypingApp(tk.Tk):
             elif not in_lesson and chip.winfo_manager():
                 chip.pack_forget()
         self.source.lang, self.source.mode, self.source.stage = self.lang, self.mode, self.stage
+        self.source.options = self.options
+        self._refresh_option_chips()
         self._refresh_session_line()
+        self._sync_keyboard_kind()
+
+    def _refresh_option_chips(self) -> None:
+        """Опции текста: подсвечены включённые; в уроках их нет вовсе."""
+        if not hasattr(self, "_option_chips"):
+            return
+        for name, chip in self._option_chips.items():
+            on = getattr(self.options, name)
+            chip.configure(bg=theme.PANEL_HI if on else theme.BG,
+                           fg=theme.ACCENT if on else theme.TEXT_FAINT)
+        visible = self.mode is not Mode.LESSON
+        if visible and not self._option_box.winfo_manager():
+            self._option_box.pack(side="left")
+        elif not visible and self._option_box.winfo_manager():
+            self._option_box.pack_forget()
+
+    def _sync_keyboard_kind(self) -> None:
+        """Перестроить клавиатуру, если сменился её состав (ряд цифр, Shift)."""
+        if self._kb_full_drawn is None or self._kb_full_drawn == self._kb_full:
+            return
+        self.kb_canvas.configure(height=self._kb_height())
+        self._compact_saving = 0          # прежняя оценка была для другой высоты
+        self._layout_keyboard()
+
+    def _set_options(self, **changes: bool) -> None:
+        self.options = replace(self.options, **changes)
+        self._refresh_chips()
+        self.new_test()
+
+    def toggle_caps(self) -> None:
+        self._set_options(caps=not self.options.caps)
+
+    def toggle_punct(self) -> None:
+        self._set_options(punct=not self.options.punct)
+
+    def toggle_digits(self) -> None:
+        self._set_options(digits=not self.options.digits)
 
     def _refresh_hint(self) -> None:
         session = self.session
@@ -1272,6 +1384,9 @@ class TypingApp(tk.Tk):
             "stage": self.stage,
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
+            "caps": self.options.caps,
+            "punct": self.options.punct,
+            "digits": self.options.digits,
         })
 
     def _quit(self) -> None:

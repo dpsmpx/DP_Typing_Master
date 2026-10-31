@@ -602,7 +602,10 @@ def hidpi_app(tmp_path, monkeypatch):
     from dp_typing import app as app_module
     from dp_typing import storage
 
+    original = {}
+
     def double(self):
+        original["scaling"] = self.tk.call("tk", "scaling")
         self.tk.call("tk", "scaling", 2 * 96 / 72)
         return 2.0
 
@@ -614,6 +617,9 @@ def hidpi_app(tmp_path, monkeypatch):
     window.geometry("2080x1440")
     settle(window, 800)
     yield window
+    # tk scaling общий на весь дисплей процесса — без возврата следующие
+    # окна в этом же прогоне тестов тоже считали бы экран HiDPI.
+    window.tk.call("tk", "scaling", original["scaling"])
     window.destroy()
 
 
@@ -662,3 +668,101 @@ def test_new_record_is_announced(app):
     for ch in app.session.target:
         press(app, ch)
     assert "новый рекорд" in app.result_var.get()
+
+
+# ------------------------------------------- заглавные, знаки, цифры (A-27)
+
+def test_text_options_change_the_text(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.toggle_caps()
+    app.toggle_punct()
+    target = app.session.target
+    assert target[0].isupper()
+    assert target[-1] in ".!?"
+    on = app._option_chips["caps"].cget("fg")
+    assert on == theme.ACCENT
+    app.toggle_caps()
+    assert app._option_chips["caps"].cget("fg") != theme.ACCENT
+
+
+def test_full_keyboard_has_number_row_and_shifts(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    basic = set(app._kb_items)
+    assert "1" not in basic and "shift_left" not in basic
+    app.toggle_digits()
+    settle(app)
+    full = set(app._kb_items)
+    assert {"1", "0", "shift_left", "shift_right", "ё"} <= full
+    assert int(app.kb_canvas.cget("height")) > 0
+    # В уроках опций нет — и клавиатура снова простая.
+    app.mode = Mode.LESSON
+    app._refresh_chips()
+    settle(app)
+    assert "shift_left" not in app._kb_items
+    assert not app._option_box.winfo_ismapped()
+
+
+def test_capital_highlights_key_and_opposite_shift(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.toggle_caps()
+    settle(app)
+    _render(app, "Привет мир")
+    assert app._hot_key == "п" and app._hot_shift == "shift_right"   # п — левая рука
+    rect, _ = app._kb_items["shift_right"]
+    assert app.kb_canvas.itemcget(rect, "fill") == theme.KEY_NEXT_BG
+    assert "Shift правой" in app.finger_var.get()
+    press_key(app, "П", state=0x1)                   # Shift зажат — это не Caps Lock
+    assert notice_text(app) == ""
+    assert app.session.errors == 0
+    assert app._hot_shift is None                    # «р» — без Shift
+
+
+def test_punctuation_hint_on_russian_layout(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.toggle_punct()
+    settle(app)
+    _render(app, "да, нет")
+    for ch in "да":
+        press(app, ch)
+    assert app._hot_key == "." and app._hot_shift == "shift_left"   # запятая — Shift+точка
+    assert "правый мизинец" in app.finger_var.get()
+
+
+def test_record_key_includes_text_options(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    plain = app._record_key()
+    app.toggle_punct()
+    assert app._record_key() != plain
+    assert app._record_key().endswith("/.")
+
+
+def test_options_are_persisted(app, tmp_path):
+    import json
+
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.toggle_digits()
+    app._persist()
+    saved = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
+    assert saved["digits"] is True and saved["caps"] is False
+
+
+def test_full_keyboard_fits_minimum_window(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.toggle_caps()
+    app.toggle_punct()
+    app.toggle_digits()
+    w, h = (int(v) for v in app.wm_minsize())
+    app.geometry(f"{w}x{h}")
+    settle(app, 600)
+    _render(app, WORST_PHRASE)
+    _assert_everything_fits(app)
+    for ch, (rect, label) in app._kb_items.items():
+        r, t = app.kb_canvas.bbox(rect), app.kb_canvas.bbox(label)
+        assert t[1] >= r[1] - 1 and t[3] <= r[3] + 1, f"подпись «{ch}» выше клавиши"

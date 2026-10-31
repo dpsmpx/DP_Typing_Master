@@ -1,6 +1,8 @@
-"""Описание раскладок: ряды, пальцы, зоны для тренировочных уроков.
+"""Описание раскладок: ряды, пальцы, Shift, зоны для тренировочных уроков.
 
 Нужно для двух вещей: экранной клавиатуры-подсказки и уроков по рядам.
+Русская раскладка — стандартная «Русская» Windows и «Русская — ПК» macOS:
+запятая там на Shift+точке, а «№», «;», «:» и «?» — в ряду цифр.
 """
 
 from __future__ import annotations
@@ -36,6 +38,10 @@ class Layout:
     #: Название раскладки в родительном/винительном падеже для подсказок:
     #: «переключите на русскую».
     accusative: str = ""
+    #: Полная клавиатура: ряд цифр и три буквенных ряда со всеми знаками —
+    #: пары «без Shift / с Shift», по позициям. Нужна для заглавных,
+    #: пунктуации и цифр.
+    full: tuple[tuple[str, str], ...] = ()
 
     @property
     def rows(self) -> tuple[str, str, str]:
@@ -59,6 +65,12 @@ QWERTY = Layout(
     bottom="zxcvbnm,.",
     anchors=("f", "j"),
     accusative="английскую",
+    full=(
+        ("`1234567890-=", "~!@#$%^&*()_+"),
+        ("qwertyuiop[]\\", "QWERTYUIOP{}|"),
+        ("asdfghjkl;'", 'ASDFGHJKL:"'),
+        ("zxcvbnm,./", "ZXCVBNM<>?"),
+    ),
 )
 
 JCUKEN = Layout(
@@ -70,6 +82,12 @@ JCUKEN = Layout(
     anchors=("а", "о"),
     top_extra="ё",
     accusative="русскую",
+    full=(
+        ("ё1234567890-=", 'Ё!"№;%:?*()_+'),
+        ("йцукенгшщзхъ\\", "ЙЦУКЕНГШЩЗХЪ/"),
+        ("фывапролджэ", "ФЫВАПРОЛДЖЭ"),
+        ("ячсмитьбю.", "ЯЧСМИТЬБЮ,"),
+    ),
 )
 
 LAYOUTS: dict[str, Layout] = {"en": QWERTY, "ru": JCUKEN}
@@ -108,7 +126,68 @@ FINGERS: dict[str, dict[str, int]] = {
 
 def finger_for(lang: str, ch: str) -> int | None:
     """Каким пальцем бить по символу ``ch``. ``None`` — символа нет в раскладке."""
+    stroke = KEYMAPS.get(lang, {}).get(ch)
+    if stroke is not None:
+        return stroke.finger
     return FINGERS.get(lang, {}).get(ch.lower())
+
+
+# ------------------------------------------------------ полная клавиатура
+
+#: Пальцы по колонкам буквенных рядов (сверх десяти колонок — мизинец).
+_COLUMN_FINGERS = (LEFT_PINKY, LEFT_RING, LEFT_MIDDLE, LEFT_INDEX, LEFT_INDEX,
+                   RIGHT_INDEX, RIGHT_INDEX, RIGHT_MIDDLE, RIGHT_RING, RIGHT_PINKY)
+
+
+@dataclass(frozen=True)
+class Stroke:
+    """Как набрать символ: какая клавиша, нужен ли Shift и каким пальцем."""
+
+    key: str          # символ клавиши без Shift — её имя на экранной клавиатуре
+    shift: bool
+    finger: int
+
+    @property
+    def left_hand(self) -> bool:
+        return self.finger <= LEFT_INDEX
+
+    @property
+    def shift_side(self) -> str | None:
+        """Какой Shift жать: противоположной рукой, как учат при слепом наборе."""
+        if not self.shift:
+            return None
+        return "right" if self.left_hand else "left"
+
+
+def _stroke_finger(row: int, col: int) -> int:
+    if row == 0:
+        # Ряд цифр сдвинут на колонку влево: «ё»/«`» и «1» — левый мизинец,
+        # дальше 2 — безымянный, 3 — средний, 4-5 — указательный и т.д.
+        col -= 1
+        if col < 0:
+            return LEFT_PINKY
+    return _COLUMN_FINGERS[col] if col < len(_COLUMN_FINGERS) else RIGHT_PINKY
+
+
+def _keymap(layout: Layout) -> dict[str, Stroke]:
+    out: dict[str, Stroke] = {" ": Stroke(" ", False, THUMB)}
+    for row, (plain, shifted) in enumerate(layout.full):
+        for col, (base, upper) in enumerate(zip(plain, shifted)):
+            finger = _stroke_finger(row, col)
+            out.setdefault(base, Stroke(base, False, finger))
+            out.setdefault(upper, Stroke(base, True, finger))
+    return out
+
+
+#: Символ → как его набрать, для каждой раскладки.
+KEYMAPS: dict[str, dict[str, Stroke]] = {
+    code: _keymap(layout) for code, layout in LAYOUTS.items()
+}
+
+
+def stroke_for(lang: str, ch: str) -> Stroke | None:
+    """Как набрать ``ch`` в раскладке ``lang``; None — такого символа на ней нет."""
+    return KEYMAPS.get(lang, {}).get(ch)
 
 
 def key_zone(lang: str, keys: str) -> set[str]:
@@ -121,8 +200,8 @@ def key_zone(lang: str, keys: str) -> set[str]:
 
 # ------------------------------------------------- проблемы ввода
 
-#: Бит Caps Lock в ``event.state`` Tk (LockMask) — одинаков на X11, Windows
-#: и macOS.
+#: Биты ``event.state`` Tk — одинаковы на X11, Windows и macOS.
+SHIFT_MASK = 0x1
 CAPS_LOCK_MASK = 0x2
 
 #: Проблемы, о которых стоит предупредить: нажатие пришло «не туда» по вине
@@ -149,9 +228,10 @@ def input_problem(lang: str, ch: str, expected: str, state: int = 0) -> str | No
     script = alphabet_of(ch)
     if script is not None and script != lang and alphabet_of(expected) != script:
         return WRONG_LAYOUT
-    # Бит Lock надёжен не везде, поэтому есть и запасной признак: набрана
-    # заглавная там, где ждали ту же строчную.
-    caps = state & CAPS_LOCK_MASK or (ch.isupper() and ch.lower() == expected)
-    if ch.isalpha() and ch != expected and caps:
+    # Бит Lock надёжен не везде, поэтому есть и запасной признак: заглавная
+    # пришла без зажатого Shift. Если Shift зажат, заглавная — просто ошибка
+    # пальцев, Caps Lock тут ни при чём.
+    locked = bool(state & CAPS_LOCK_MASK) or (ch.isupper() and not state & SHIFT_MASK)
+    if locked and ch.isalpha() and ch != expected:
         return CAPS_LOCK
     return None

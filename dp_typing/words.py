@@ -17,6 +17,7 @@ import random
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 
@@ -188,17 +189,104 @@ def adaptive_weights(
     ]
 
 
+# --------------------------------------------- заглавные, знаки, цифры
+
+@dataclass(frozen=True)
+class TextOptions:
+    """Что добавить к словам, чтобы текст был похож на настоящий (A-27)."""
+
+    caps: bool = False      # заглавные: начало предложения и изредка внутри
+    punct: bool = False     # знаки препинания, скобки, кавычки, тире
+    digits: bool = False    # числа вместо части слов
+
+    @property
+    def any(self) -> bool:
+        return self.caps or self.punct or self.digits
+
+    @property
+    def key(self) -> str:
+        """Короткая метка для ключа рекорда: «A.1» — всё включено."""
+        return "".join(mark for mark, on in (("A", self.caps), (".", self.punct),
+                                             ("1", self.digits)) if on)
+
+
+#: Вероятности — на одно слово. Подобраны так, чтобы текст читался как
+#: обычный: запятая каждые 6-7 слов, предложение в 4-9 слов.
+P_COMMA = 0.15
+P_RARE_MARK = 0.03      # «:» или «;» вместо запятой
+P_DASH = 0.04
+P_BRACKETS = 0.03
+P_QUOTES = 0.03
+P_CAPITAL = 0.10        # заглавная внутри предложения (имена, названия)
+P_NUMBER = 0.15
+SENTENCE_WORDS = (4, 9)
+
+
+def number_token(rng: random.Random) -> str:
+    """Число, какие встречаются в тексте: 7, 42, 350, 2024."""
+    roll = rng.random()
+    if roll < 0.45:
+        return str(rng.randint(0, 99))
+    if roll < 0.8:
+        return str(rng.randint(100, 9999))
+    return str(rng.randint(1900, 2030))
+
+
+def decorate(words: Sequence[str], rng: random.Random, options: TextOptions) -> list[str]:
+    """Превратить список слов в текст с заглавными, знаками и цифрами.
+
+    Число слов (токенов через пробел) сохраняется — важно для тестов «на N
+    слов»: число заменяет слово, тире добавляется к слову через пробел.
+    """
+    if not options.any:
+        return list(words)
+    out: list[str] = []
+    left = rng.randint(*SENTENCE_WORDS)
+    sentence_start = True
+    last = len(words) - 1
+    for i, word in enumerate(words):
+        if options.digits and rng.random() < P_NUMBER:
+            word = number_token(rng)
+        elif options.caps and (sentence_start or rng.random() < P_CAPITAL):
+            word = word[:1].upper() + word[1:]
+        sentence_start = False
+        if options.punct:
+            roll = rng.random()
+            if roll < P_BRACKETS:
+                word = f"({word})"
+            elif roll < P_BRACKETS + P_QUOTES:
+                word = f'"{word}"'
+            left -= 1
+            if left <= 0 or i == last:
+                word += rng.choices(".!?", weights=(14, 3, 3))[0]
+                left = rng.randint(*SENTENCE_WORDS)
+                sentence_start = True
+            elif rng.random() < P_COMMA:
+                word += "," if rng.random() > P_RARE_MARK / P_COMMA else rng.choice(":;")
+            elif rng.random() < P_DASH:
+                word += " -"
+        out.append(word)
+    return out
+
+
 # --------------------------------------------------------------- фасад
 
 class TextSource:
     """Выдаёт фразы по текущему режиму, языку и ступени урока."""
 
     def __init__(self, lang: str = "ru", mode: Mode = Mode.COMMON,
-                 stage: int = 0, rng: random.Random | None = None) -> None:
+                 stage: int = 0, rng: random.Random | None = None,
+                 options: TextOptions | None = None) -> None:
         self.lang = lang
         self.mode = mode
         self.stage = stage
         self.rng = rng or random.Random()
+        self.options = options or TextOptions()
+
+    @property
+    def decorates(self) -> bool:
+        """Опции текста не действуют в уроках: там свои ступени клавиш."""
+        return self.mode is not Mode.LESSON and self.options.any
 
     @property
     def stage_title(self) -> str:
@@ -208,6 +296,8 @@ class TextSource:
     def phrase(self, word_count: int = 9, weak: Sequence[tuple[str, float]] = ()) -> str:
         """Собрать фразу из ``word_count`` слов."""
         words = self._pick(word_count, weak)
+        if self.decorates:
+            words = decorate(words, self.rng, self.options)
         return " ".join(words)
 
     def _pick(self, n: int, weak: Sequence[tuple[str, float]]) -> list[str]:
