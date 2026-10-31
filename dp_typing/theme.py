@@ -82,6 +82,12 @@ def next_threshold(combo: int) -> int | None:
 
 
 def accuracy_color(accuracy: float) -> str:
+    """Цвет точности — по тому значению, которое видит пользователь.
+
+    Округляем так же, как при выводе (``f"{x:.0f}"``), иначе 96,7% выглядело
+    как «97%», но красилось жёлтым, а 97,1% — зелёным.
+    """
+    accuracy = round(accuracy)
     if accuracy >= 97.0:
         return GOOD
     if accuracy >= 92.0:

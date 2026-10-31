@@ -42,9 +42,7 @@ CLOCK = VirtualClock()
 PACE = random.Random(7)
 # Сессии приложения получают виртуальные часы — иначе программный ввод
 # мгновенный и скорость упиралась бы в потолок 1500 знаков/мин.
-app_module.TypingSession = lambda target, strict=False: TypingSession(
-    target, strict=strict, clock=CLOCK
-)
+app_module.TypingSession = lambda target, **kw: TypingSession(target, clock=CLOCK, **kw)
 
 
 def settle(win, ms: int = 350) -> None:
@@ -76,7 +74,6 @@ def type_chars(win, count: int, errors_at: frozenset[int] = frozenset()) -> None
 
 def finish(win, errors_at: frozenset[int] = frozenset()) -> None:
     type_chars(win, len(win.session.target), errors_at)
-    win._cancel_next()          # не уходить на следующую фразу во время съёмки
 
 
 def shot(win, out: Path, name: str) -> None:

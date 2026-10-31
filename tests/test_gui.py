@@ -3,16 +3,34 @@
 Пропускаются там, где нет tkinter или дисплея. Запуск с виртуальным экраном:
 
     xvfb-run -a pytest tests/test_gui.py
+
+С переменной ``DP_REQUIRE_GUI=1`` (так запускает CI) отсутствие tkinter или
+дисплея — ошибка, а не пропуск: иначе сломанный интерфейс прятался бы за
+зелёной галочкой из одних «skipped».
 """
 
+import os
 import time
 
 import pytest
 
-tk = pytest.importorskip("tkinter", reason="tkinter недоступен")
+REQUIRE_GUI = bool(os.environ.get("DP_REQUIRE_GUI"))
+if REQUIRE_GUI:
+    import tkinter as tk
+else:
+    tk = pytest.importorskip("tkinter", reason="tkinter недоступен")
 
 from dp_typing import theme  # noqa: E402
 from dp_typing.words import Mode  # noqa: E402
+
+
+def _make_window(app_module):
+    try:
+        return app_module.TypingApp()
+    except tk.TclError as exc:                      # нет дисплея
+        if REQUIRE_GUI:
+            raise
+        pytest.skip(f"дисплей недоступен: {exc}")
 
 
 @pytest.fixture
@@ -24,10 +42,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "config_path", lambda: tmp_path / "profile.json")
     monkeypatch.setattr(app_module, "save_profile",
                         lambda *a, **k: storage.save(*a, path=tmp_path / "profile.json", **k))
-    try:
-        window = app_module.TypingApp()
-    except tk.TclError as exc:                      # нет дисплея
-        pytest.skip(f"дисплей недоступен: {exc}")
+    window = _make_window(app_module)
     settle(window)
     yield window
     window.destroy()
@@ -44,6 +59,16 @@ def settle(window, ms: int = 400) -> None:
 def press(window, ch: str, keysym: str = "a") -> None:
     window._on_key(type("Event", (), {"char": ch, "keysym": keysym, "state": 0})())
     window.update()
+
+
+def visible_background(window, index: str) -> str:
+    """Фон, который Tk нарисует под символом: у тега с наивысшим приоритетом
+    среди задающих фон (tag_names отдаёт теги по возрастанию приоритета)."""
+    for tag in reversed(window.text.tag_names(index)):
+        bg = window.text.tag_cget(tag, "background")
+        if bg:
+            return bg
+    return window.text.cget("background")
 
 
 def pending_after_jobs(window) -> int:
@@ -109,27 +134,29 @@ def test_exactly_one_ticker_during_a_test(app):
     assert pending_after_jobs(app) <= 2       # тикер + возможный кадр анимации
 
 
-def test_finish_schedules_exactly_one_transition(app):
-    for ch in app.session.target:
+def test_result_stays_until_a_key_is_pressed(app):
+    """Итог фразы не исчезает сам: его можно спокойно прочитать (A-13)."""
+    phrase = app.session.target
+    for ch in phrase:
         press(app, ch)
     assert app.session.finished
     assert app._tick_id is None
-    assert app._next_id is not None
+    settle(app, 1800)                          # раньше тут был автопереход
+    assert app.session.finished and app.session.target == phrase
+    assert app.result_var.get()
+    assert "любая клавиша" in app.hint_var.get()
 
-    # Ревью #2: повторный финиш не имеет права поставить второй таймер.
-    press(app, "x")                            # досрочный переход
-    assert app._next_id is None
-    assert app.session.pos == 0
+    press(app, "x")                            # любая клавиша — следующая фраза
+    assert not app.session.finished
+    assert app.session.pos == 0 and app.session.keystrokes == 0
+    assert app.result_var.get() == ""
 
 
 def test_idle_again_after_a_full_cycle(app):
-    """Отработав фразу и перейдя к следующей, приложение снова засыпает."""
-    from dp_typing.app import NEXT_TEST_MS
-
+    """Отработав фразу, приложение засыпает — даже таймера перехода нет."""
     for ch in app.session.target:
         press(app, ch)
-    settle(app, NEXT_TEST_MS + 400)            # ждём автопереход
-    assert app._next_id is None
+    settle(app, 500)                           # кадры анимации комбо доиграют
     assert pending_after_jobs(app) == 0
 
 
@@ -194,8 +221,7 @@ def test_strict_error_is_visible_under_caret(app):
     assert app.session.pos == 1
     tags = app.text.tag_names("1.1")
     assert "caret_bad" in tags and "caret" not in tags
-    # Видимый фон — от тега с наивысшим приоритетом, он последний в списке.
-    assert app.text.tag_cget(tags[-1], "background") == theme.CARET_BAD
+    assert visible_background(app, "1.1") == theme.CARET_BAD
 
     press(app, target[1])                     # исправились — каретка обычная
     assert "caret" in app.text.tag_names("1.2")
@@ -241,10 +267,8 @@ def _assert_everything_fits(app):
 
 
 def _render(app, phrase):
-    from dp_typing.engine import TypingSession
-
-    app.session = TypingSession(phrase)
-    app._render_target(phrase)
+    """Начать тест с заданной фразой тем же путём, что и new_test."""
+    app._start_session(phrase)
     settle(app, 400)
 
 
@@ -313,3 +337,304 @@ def test_short_phrase_does_not_reserve_extra_rows(app):
     app._render_target("коротко")
     app.update_idletasks()
     assert int(app.text.cget("height")) == 1
+
+
+# ================================================================ этап 2.1
+
+def press_key(window, ch: str, state: int = 0) -> None:
+    window._on_key(type("Event", (), {"char": ch, "keysym": "a", "state": state})())
+    window.update()
+
+
+def notice_text(window) -> str:
+    window.update()
+    return window.notice.cget("text") if window.notice.winfo_ismapped() else ""
+
+
+# ------------------------------------------------- раскладка ОС и Caps Lock
+
+def test_wrong_system_layout_is_reported_and_counted(app):
+    """A-10: латиница в русской тренировке — подсказка, но ошибка засчитана."""
+    assert app.lang == "ru"
+    press_key(app, "g")
+    assert "раскладк" in notice_text(app) and "русскую" in notice_text(app)
+    assert app.session.errors == 1               # выбор: предупреждать и считать
+    press_key(app, app.session.target[app.session.pos])
+    assert notice_text(app) == ""                # исправились — плашка ушла
+
+
+def test_caps_lock_is_reported(app):
+    """A-11: по биту Caps Lock и по заглавной вместо строчной."""
+    press_key(app, app.session.target[0].upper())
+    assert "Caps Lock" in notice_text(app)
+    app.new_test()
+    assert notice_text(app) == ""                # новая фраза — чистый лист
+    press_key(app, "ы" if app.session.target[0] != "ы" else "ф", state=0x2)
+    assert "Caps Lock" in notice_text(app)
+
+
+def test_input_notice_disappears_by_itself(app, monkeypatch):
+    from dp_typing import app as app_module
+
+    monkeypatch.setattr(app_module, "INPUT_NOTICE_MS", 150)
+    press_key(app, "g")
+    assert notice_text(app)
+    settle(app, 400)
+    assert notice_text(app) == ""
+    assert app._notice_id is None
+
+
+# -------------------------------------------------- сброс с подтверждением
+
+def test_reset_needs_a_second_press(app):
+    """A-12: одно F7 не стирает статистику, второе подряд — стирает."""
+    app.profile.tests = 7
+    app.request_reset()
+    assert app.profile.tests == 7
+    assert "F7" in notice_text(app)
+    app.request_reset()
+    assert app.profile.tests == 0
+    assert "сброшена" in notice_text(app)
+
+
+def test_notice_does_not_cover_the_result(app, monkeypatch):
+    """Плашка и итог фразы не рисуются друг поверх друга."""
+    from dp_typing import app as app_module
+
+    monkeypatch.setattr(app_module, "RESET_CONFIRM_MS", 150)
+    for ch in app.session.target:
+        press(app, ch)
+    result = app.result_var.get()
+    assert result
+    app.request_reset()
+    assert notice_text(app) and app.result_var.get() == ""
+    settle(app, 400)                             # плашка ушла — итог вернулся
+    assert notice_text(app) == ""
+    assert app.result_var.get() == result
+
+
+def test_reset_confirmation_expires(app):
+    app.profile.tests = 7
+    app.request_reset()
+    app._reset_armed_until = 0.0                 # прошло больше 3 секунд
+    app.request_reset()
+    assert app.profile.tests == 7                # это снова первое нажатие
+
+
+# --------------------------------------------------------- модальная справка
+
+def test_help_blocks_typing_and_esc_closes_it(app):
+    """A-06: при открытой справке печать не уходит в тест, Esc её закрывает."""
+    phrase = app.session.target
+    app.toggle_help()
+    press(app, phrase[0])
+    assert app.session.keystrokes == 0
+    assert app._tick_id is None
+    app.event_generate("<Escape>")
+    app.update()
+    assert not app.help_frame.winfo_ismapped()
+    assert app.session.target == phrase          # Esc не пропустил фразу
+
+
+# -------------------------------------------------- брошенная фраза и пауза
+
+def test_skipped_phrase_feeds_key_statistics(app):
+    """A-08: Esc не засчитывает тест, но ошибки идут в слабые клавиши."""
+    for _ in range(3):
+        press(app, "№")
+    app.event_generate("<Escape>")
+    app.update()
+    assert app.profile.tests == 0
+    assert sum(app.profile.char_errors.values()) == 3
+
+
+def test_timer_sleeps_while_idle(app, monkeypatch):
+    """A-07: после простоя таймер засыпает и показывает паузу."""
+    from dp_typing import engine
+
+    monkeypatch.setattr(engine, "IDLE_GAP", 0.1)
+    target = app.session.target
+    press(app, target[0])
+    settle(app, 500)
+    assert app._tick_id is None
+    assert pending_after_jobs(app) == 0
+    assert "пауза" in app.result_var.get()
+
+    press(app, target[1])                        # вернулись — время пошло
+    assert app._tick_id is not None
+    assert app.result_var.get() == ""
+
+
+# --------------------------------------------------------------------- ё
+
+def test_yo_has_a_key_and_accepts_e(app):
+    """A-09: у «ё» есть клавиша и подсказка, «е» на её месте — не ошибка."""
+    _render(app, "ёж ещё")
+    assert app._hot_key == "ё"
+    rect, _ = app._kb_items["ё"]
+    assert app.kb_canvas.itemcget(rect, "fill") == theme.KEY_NEXT_BG
+    assert "мизинец" in app.finger_var.get() and "«е»" in app.finger_var.get()
+    for ch in "еж еще":
+        press(app, ch)
+    assert app.session.finished
+    assert app.session.errors == 0
+
+
+# ------------------------------------------------------- ступени и чипы
+
+def test_stage_chip_only_in_lessons(app):
+    """A-18: вне уроков чипа ступени нет — кликнуть по нему нельзя."""
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.update()
+    assert not app._chips[2].winfo_ismapped()
+    app.mode = Mode.LESSON
+    app._refresh_chips()
+    app.update()
+    assert app._chips[2].winfo_ismapped()
+
+
+def test_f4_enters_lessons_and_does_not_wrap(app):
+    """A-15: F4 с последней ступени не прыгает на первую."""
+    from dp_typing.words import lesson_stages
+
+    last = len(lesson_stages(app.lang)) - 1
+    app.mode, app.stage = Mode.COMMON, last
+    app.next_stage()
+    assert app.mode is Mode.LESSON and app.stage == last    # просто вошли в уроки
+    app.next_stage()
+    assert app.stage == last
+    assert "последняя" in notice_text(app)
+    app.stage = 0
+    app.prev_stage()
+    assert app.stage == 0
+    assert "первая" in notice_text(app)
+
+
+# ----------------------------------------------------------- мелкие правки
+
+def test_stat_tiles_have_equal_width(app):
+    """A-20: ширина плитки не зависит от длины подписи."""
+    widths = {tile.winfo_width() for tile in app.stat_tiles}
+    assert max(widths) - min(widths) <= 1
+    right = app.stat_tiles[-1].winfo_x() + app.stat_tiles[-1].winfo_width()
+    assert abs(right - app._text_wrap.winfo_width()) <= 1     # край вровень с фразой
+
+
+def test_accuracy_colour_matches_what_is_shown():
+    """A-19: «97%» всегда одного цвета, сколько бы ни было после запятой."""
+    assert theme.accuracy_color(96.7) == theme.accuracy_color(97.0) == theme.GOOD
+    assert theme.accuracy_color(96.4) == theme.WARN
+
+
+def wrapping_phrase(app, lines: int = 2) -> str:
+    """Фраза, которая при текущем шрифте займёт не меньше ``lines`` строк.
+
+    Длина подбирается по реальной ширине шрифта: в сборках Tk без Xft
+    символы втрое уже, и «длинная» фраза влезала бы в одну строку.
+    """
+    width = app.text.winfo_width() - 2 * int(app.text.cget("padx"))
+    words = ["фраза", "подлиннее", "которая", "наверняка", "перенесётся", "на",
+             "следующую", "строку"]
+    out: list[str] = []
+    while app.f_target.measure(" ".join(out)) < width * (lines - 0.5):
+        out.append(words[len(out) % len(words)])
+    return " ".join(out)
+
+
+def test_phrase_panel_top_does_not_jump(app):
+    """A-21: панель с фразой не прыгает, когда меняется число строк."""
+    _render(app, "коротко")
+    top = app._text_wrap.winfo_y()
+    _render(app, wrapping_phrase(app))
+    assert int(app.text.cget("height")) >= 2
+    assert app._text_wrap.winfo_y() == top
+
+
+def test_lines_are_centred_without_tk_justify(app):
+    """A-05: строки центрируются отступом, а не justify=center.
+
+    При justify=center Tk растягивал фон первого символа строки до левого
+    края — каретка в начале строки превращалась в полосу.
+    """
+    phrase = wrapping_phrase(app)
+    _render(app, phrase)
+    assert len(app._lines) >= 2
+    text = app.text
+    assert text.tag_cget("base", "justify") in ("", "left")
+    padx = int(text.cget("padx"))
+    width = text.winfo_width() - 2 * padx
+    for row, line in enumerate(app._lines, start=1):
+        x, _, _, _ = text.bbox(f"{row}.0")
+        left = x - padx
+        right = width - left - app.f_target.measure(line.rstrip(" "))
+        assert abs(left - right) <= app.f_target.measure("0") + 1, f"строка {row} не по центру"
+
+    # Отступ залит цветом панели, а не фоном первого символа строки.
+    for row in range(1, len(app._lines) + 1):
+        assert text.tag_cget(f"line{row}", "lmargincolor") == theme.PANEL
+
+    # Каретка в начале второй строки — ровно на своём символе.
+    start_of_second = len(app._lines[0])
+    for ch in phrase[:start_of_second]:
+        press(app, ch)
+    assert app._spans[app.session.pos][0] == "2.0"
+    assert "caret" in text.tag_names("2.0")
+
+
+def test_marks_survive_a_resize(app):
+    """Перенос строк пересчитывается при ресайзе, разметка не теряется."""
+    target = app.session.target
+    press(app, target[0])
+    press(app, "№")
+    app.geometry("800x600")
+    settle(app, 600)
+    assert "ok" in app.text.tag_names(app._spans[0][0])
+    assert "bad" in app.text.tag_names(app._spans[1][0])
+    assert app._caret_tag in app.text.tag_names(app._spans[2][0])
+
+
+# ------------------------------------------------------------------ HiDPI
+
+@pytest.fixture
+def hidpi_app(tmp_path, monkeypatch):
+    """Окно на экране 192 dpi (масштаб 200%)."""
+    from dp_typing import app as app_module
+    from dp_typing import storage
+
+    def double(self):
+        self.tk.call("tk", "scaling", 2 * 96 / 72)
+        return 2.0
+
+    monkeypatch.setattr(storage, "config_path", lambda: tmp_path / "profile.json")
+    monkeypatch.setattr(app_module, "save_profile",
+                        lambda *a, **k: storage.save(*a, path=tmp_path / "profile.json", **k))
+    monkeypatch.setattr(app_module.TypingApp, "_detect_scale", double)
+    window = _make_window(app_module)
+    window.geometry("2080x1440")
+    settle(window, 800)
+    yield window
+    window.destroy()
+
+
+def test_hidpi_layout_scales(hidpi_app):
+    """A-04: при масштабе 200% ничего не налезает друг на друга."""
+    app = hidpi_app
+    assert app.scale == 2.0
+    _render(app, "обычная фраза для проверки масштаба")
+    _assert_everything_fits(app)
+
+    # Рамка текста включает запас под нижние выносные элементы, которых у
+    # «×N» нет, поэтому перекрытие рамок в пределах этого запаса — норма.
+    c = app.combo_canvas
+    value, caption = c.bbox(app._combo_value), c.bbox(app._combo_caption)
+    descent = app.f_combo.metrics("descent")
+    assert value[3] - descent <= caption[1], "«×N» налезает на «КОМБО»"
+
+    for ch, (rect, label) in app._kb_items.items():
+        r, t = app.kb_canvas.bbox(rect), app.kb_canvas.bbox(label)
+        assert t[0] >= r[0] - 1 and t[2] <= r[2] + 1, f"буква «{ch}» шире клавиши"
+        assert t[1] >= r[1] - 1 and t[3] <= r[3] + 1, f"буква «{ch}» выше клавиши"
+
+    header = app._header_bar
+    assert header.winfo_reqwidth() <= header.winfo_width(), "заголовок обрезан"
