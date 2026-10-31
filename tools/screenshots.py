@@ -134,9 +134,15 @@ def main(out: Path) -> int:
     shot(win, out, "07_help")
     win.toggle_help()
 
-    win.toggle_language()
+    win.toggle_language()                        # русский, а печатаем латиницей
     win.mode = Mode.COMMON
     win._refresh_chips()
+    win.new_test()
+    type_chars(win, 4)
+    for ch in "ghb":
+        press(win, ch)
+    shot(win, out, "09_layout_notice")
+
     win.geometry("760x560+0+0")
     settle(win, 500)
     win.new_test()
