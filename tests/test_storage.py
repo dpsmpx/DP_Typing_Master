@@ -94,3 +94,12 @@ def test_config_path_is_absolute_and_named():
     path = config_path()
     assert path.is_absolute()
     assert path.name == "profile.json"
+
+
+def test_custom_text_round_trip(tmp_path):
+    from dp_typing.storage import load_custom_text, save_custom_text
+
+    path = tmp_path / "sub" / "custom.txt"
+    assert load_custom_text(path) is None
+    assert save_custom_text("Мороз и солнце", path) is True
+    assert load_custom_text(path) == "Мороз и солнце"

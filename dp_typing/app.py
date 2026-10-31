@@ -29,6 +29,7 @@ from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
 from . import __version__, theme
+from .customtext import CustomText, CustomTextError, sample
 from .engine import Mark, Profile, TypingSession
 from .fmt import count, wrap_words
 from .layout import (
@@ -41,6 +42,7 @@ from .layout import (
     stroke_for,
 )
 from .storage import load as load_profile
+from .storage import load_custom_text, save_custom_text
 from .storage import restore as restore_profile
 from .storage import save as save_profile
 from .words import LENGTHS, Length, Mode, TextOptions, TextSource, lesson_stages
@@ -62,7 +64,7 @@ INPUT_NOTICE_MS = 4000
 #: Короткие сообщения: «последняя ступень», «статистика сброшена».
 INFO_NOTICE_MS = 2200
 
-MODE_ORDER = (Mode.LESSON, Mode.COMMON, Mode.PSEUDO, Mode.ADAPTIVE)
+MODE_ORDER = (Mode.LESSON, Mode.COMMON, Mode.PSEUDO, Mode.ADAPTIVE, Mode.CUSTOM)
 
 # Размеры ниже — в пикселях при 96 dpi. На HiDPI они умножаются на масштаб
 # экрана (см. TypingApp.px), а кегли в пунктах Tk масштабирует сам.
@@ -169,6 +171,10 @@ class TypingApp(tk.Tk):
                                    digits=bool(saved.get("digits", False)))
 
         self.source = TextSource(self.lang, self.mode, self.stage, self.rng, self.options)
+        # Свой текст (Ctrl+O) и закладка в нём; пока не открыт — встроенный пример.
+        self.custom = self._restore_custom(saved)
+        self._samples: dict[str, CustomText] = {}
+        self._custom_chunk = ""
         self.session: TypingSession | None = None
 
         # ---- идентификаторы отложенных задач; None означает «в очереди пусто»
@@ -328,6 +334,9 @@ class TypingApp(tk.Tk):
                                      padx=self.px(8), pady=self.px(2), cursor="hand2")
         self._length_chip.pack(side="left", padx=(0, self.px(12)))
         self._length_chip.bind("<Button-1>", self._show_length_menu)
+        self._custom_var = tk.StringVar()
+        self._custom_label = tk.Label(self._options_bar, textvariable=self._custom_var,
+                                      bg=theme.BG, fg=theme.TEXT_DIM, font=self.f_hint)
         self._option_box = tk.Frame(self._options_bar, bg=theme.BG)
         self._option_chips: dict[str, tk.Label] = {}
         for name, text, cmd in (("caps", "Аа", self.toggle_caps),
@@ -486,6 +495,7 @@ class TypingApp(tk.Tk):
             ("F8 / Shift+F8", "длина теста: фраза, 10–100 слов, 15–120 секунд"),
             ("F9 / F10 / F11", "заглавные / знаки препинания / цифры"),
             ("F1", "закрыть эту справку"),
+            ("Ctrl+O", "открыть свой текст (.txt) и печатать его кусками"),
             ("Ctrl+Q", "выход"),
         )
         tk.Label(self.help_frame, text="Горячие клавиши", bg=theme.PANEL_HI,
@@ -673,7 +683,12 @@ class TypingApp(tk.Tk):
         self.bind("<F9>", lambda _e: self._action(self.toggle_caps))
         self.bind("<F10>", lambda _e: self._action(self.toggle_punct))
         self.bind("<F11>", lambda _e: self._action(self.toggle_digits))
-        self.bind("<Control-q>", lambda _e: self._quit())
+        # Сочетания с Ctrl — и на кириллической раскладке: там у клавиши Q
+        # символ «й», и привязка к <Control-q> просто не срабатывала.
+        for key in ("q", "Q", "Cyrillic_shorti", "Cyrillic_SHORTI"):
+            self.bind(f"<Control-{key}>", lambda _e: self._quit())
+        for key in ("o", "O", "Cyrillic_shcha", "Cyrillic_SHCHA"):
+            self.bind(f"<Control-{key}>", lambda _e: self._action(self.open_custom_text))
 
     @staticmethod
     def _action(fn) -> str:
@@ -686,8 +701,15 @@ class TypingApp(tk.Tk):
         if self.help_open:
             self.toggle_help()
         else:
-            self.new_test()
+            self.skip_test()
         return "break"
+
+    def skip_test(self) -> None:
+        """Пропустить фразу. В своём тексте закладка перешагивает пропущенный кусок."""
+        session = self.session
+        if self.mode is Mode.CUSTOM and session is not None and not session.finished:
+            self._advance_custom(len(session.target), finished=True)
+        self.new_test()
 
     def _on_key(self, event: tk.Event) -> str | None:
         if event.state & 0x4:  # Control — это команда, а не символ
@@ -738,6 +760,10 @@ class TypingApp(tk.Tk):
         self._absorb_abandoned()
         self._stop_tick()
         self.source.lang, self.source.mode, self.source.stage = self.lang, self.mode, self.stage
+        if self.mode is Mode.CUSTOM:
+            self._custom_chunk = self._custom_source().chunk(self.length)
+            self._start_session(self._custom_chunk)
+            return
         self._start_session(self.source.phrase(self.length.word_count(),
                                                self.profile.weak_chars()))
 
@@ -949,9 +975,78 @@ class TypingApp(tk.Tk):
             self._refresh_chips()
             self.result_var.set(self.result_var.get() + f"  →  {self.source.stage_title}")
 
+        if self.mode is Mode.CUSTOM:
+            self._advance_custom(session.pos, finished=not session.timed_out)
+
         self._refresh_session_line()
         self._refresh_hint()
         self._persist()
+
+    # ------------------------------------------------------------ свой текст
+
+    def _restore_custom(self, saved: dict) -> CustomText | None:
+        text = load_custom_text()
+        lang = saved.get("custom_lang")
+        if not text or lang not in LAYOUTS:
+            return None
+        position = saved.get("custom_pos", 0)
+        if not isinstance(position, int) or not 0 <= position < len(text):
+            position = 0
+        title = saved.get("custom_title")
+        return CustomText(title=title if isinstance(title, str) else "Свой текст",
+                          text=text, lang=lang, position=position)
+
+    def _custom_source(self) -> CustomText:
+        """Свой текст, если открыт, иначе встроенный пример на текущем языке."""
+        if self.custom is not None:
+            return self.custom
+        if self.lang not in self._samples:
+            self._samples[self.lang] = sample(self.lang)
+        return self._samples[self.lang]
+
+    def _advance_custom(self, typed: int, finished: bool) -> None:
+        source = self._custom_source()
+        if source.advance(self._custom_chunk, typed, finished):
+            self._show_notice("Текст пройден — начинаем сначала")
+        self._refresh_custom_label()
+
+    def _refresh_custom_label(self) -> None:
+        source = self._custom_source()
+        if self.custom is None:
+            self._custom_var.set("пример текста · Ctrl+O — открыть свой .txt")
+        else:
+            self._custom_var.set(f"{source.title} · {source.progress:.0%}")
+
+    def open_custom_text(self) -> None:
+        """Ctrl+O: выбрать .txt и печатать его кусками с продолжением с места."""
+        from tkinter import filedialog
+
+        path = filedialog.askopenfilename(
+            parent=self, title="Открыть текст для тренировки",
+            filetypes=(("Текст", "*.txt"), ("Все файлы", "*")))
+        if path:
+            self.load_custom_file(path)
+
+    def load_custom_file(self, path) -> bool:
+        from pathlib import Path
+
+        try:
+            text = CustomText.from_file(Path(path))
+        except CustomTextError as exc:
+            self._show_notice(str(exc), "danger", INPUT_NOTICE_MS)
+            return False
+        self.custom = text
+        save_custom_text(text.text)
+        self.mode = Mode.CUSTOM
+        if text.lang != self.lang:
+            self.lang = text.lang
+            self._layout_keyboard()
+        self._refresh_chips()
+        self.new_test()
+        self._persist()
+        self._show_notice(f"Открыт «{text.title}»: "
+                          f"{count(len(text.text), 'знак', 'знака', 'знаков')}")
+        return True
 
     def _cancel_all_jobs(self) -> None:
         """Погасить всё отложенное. Иначе кадр анимации может выстрелить уже
@@ -1207,7 +1302,7 @@ class TypingApp(tk.Tk):
     @property
     def _kb_full(self) -> bool:
         """Полная клавиатура (ряд цифр, знаки, Shift) — когда текст их требует."""
-        return self.source.decorates
+        return self.source.decorates or self.mode is Mode.CUSTOM
 
     def _kb_height(self) -> int:
         d = self.density
@@ -1327,6 +1422,10 @@ class TypingApp(tk.Tk):
     # ---------------------------------------------------------------- команды
 
     def toggle_language(self) -> None:
+        if self.mode is Mode.CUSTOM and self.custom is not None:
+            # Язык задаёт сам текст: на другой раскладке его не набрать.
+            self._show_notice("Язык задаёт открытый текст — Ctrl+O откроет другой")
+            return
         self.lang = "en" if self.lang == "ru" else "ru"
         self.stage = min(self.stage, len(lesson_stages(self.lang)) - 1)
         self._refresh_chips()
@@ -1486,11 +1585,18 @@ class TypingApp(tk.Tk):
             on = getattr(self.options, name)
             chip.configure(bg=theme.PANEL_HI if on else theme.BG,
                            fg=theme.ACCENT if on else theme.TEXT_FAINT)
-        visible = self.mode is not Mode.LESSON
+        visible = self.mode in (Mode.COMMON, Mode.PSEUDO, Mode.ADAPTIVE)
         if visible and not self._option_box.winfo_manager():
             self._option_box.pack(side="left")
         elif not visible and self._option_box.winfo_manager():
             self._option_box.pack_forget()
+        custom = self.mode is Mode.CUSTOM
+        if custom:
+            self._refresh_custom_label()
+        if custom and not self._custom_label.winfo_manager():
+            self._custom_label.pack(side="left")
+        elif not custom and self._custom_label.winfo_manager():
+            self._custom_label.pack_forget()
 
     def _sync_keyboard_kind(self) -> None:
         """Перестроить клавиатуру, если сменился её состав (ряд цифр, Shift)."""
@@ -1539,6 +1645,8 @@ class TypingApp(tk.Tk):
             "caps": self.options.caps,
             "punct": self.options.punct,
             "digits": self.options.digits,
+            **({"custom_title": self.custom.title, "custom_lang": self.custom.lang,
+                "custom_pos": self.custom.position} if self.custom else {}),
         })
 
     def _quit(self) -> None:

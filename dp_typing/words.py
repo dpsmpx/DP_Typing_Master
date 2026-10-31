@@ -34,6 +34,7 @@ class Mode(str, Enum):
     COMMON = "common"
     PSEUDO = "pseudo"
     ADAPTIVE = "adaptive"
+    CUSTOM = "custom"
 
     @property
     def title(self) -> str:
@@ -45,6 +46,7 @@ _MODE_TITLES = {
     Mode.COMMON: "Частотные слова",
     Mode.PSEUDO: "Псевдослова",
     Mode.ADAPTIVE: "Слабые клавиши",
+    Mode.CUSTOM: "Свой текст",
 }
 
 
@@ -343,8 +345,9 @@ class TextSource:
 
     @property
     def decorates(self) -> bool:
-        """Опции текста не действуют в уроках: там свои ступени клавиш."""
-        return self.mode is not Mode.LESSON and self.options.any
+        """Опции текста — только для генерируемых слов: в уроках свои ступени
+        клавиш, а свой текст уже содержит и заглавные, и знаки."""
+        return self.mode in (Mode.COMMON, Mode.PSEUDO, Mode.ADAPTIVE) and self.options.any
 
     @property
     def stage_title(self) -> str:

@@ -15,6 +15,7 @@ from .engine import Profile
 
 APP_DIR = "dp-typing-master"
 FILE_NAME = "profile.json"
+CUSTOM_FILE = "custom.txt"
 #: Версия формата. 2 — рекорды по режимам и статистика клавиш (2.2.0).
 SCHEMA = 2
 #: Старые версии, которые умеем перенести, а не выбросить.
@@ -33,6 +34,31 @@ def config_path() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / APP_DIR / FILE_NAME
+
+
+def custom_text_path() -> Path:
+    """Копия своего текста лежит рядом с профилем: оригинал могут удалить."""
+    return config_path().with_name(CUSTOM_FILE)
+
+
+def save_custom_text(text: str, path: Path | None = None) -> bool:
+    path = path or custom_text_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+        return True
+    except OSError:
+        return False
+
+
+def load_custom_text(path: Path | None = None) -> str | None:
+    path = path or custom_text_path()
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def load(path: Path | None = None) -> dict:

@@ -856,3 +856,114 @@ def test_f8_cycles_lengths(app):
     app.cycle_length(-1)
     app.cycle_length(-1)
     assert app.length == LENGTHS[-1]
+
+
+# ------------------------------------------------------------- свой текст
+
+BOOK = ("Мороз и солнце; день чудесный! Еще ты дремлешь, друг прелестный - "
+        "пора, красавица, проснись. Открой сомкнуты негой взоры навстречу "
+        "северной Авроры, звездою севера явись! Вечор, ты помнишь, вьюга злилась.")
+
+
+def _open_book(app, tmp_path, text=BOOK, encoding="cp1251"):
+    path = tmp_path / "Зимнее утро.txt"
+    path.write_text(text, encoding=encoding)
+    assert app.load_custom_file(path)
+    return path
+
+
+def test_custom_mode_without_file_uses_sample(app):
+    while app.mode is not Mode.CUSTOM:
+        app.cycle_mode()
+    assert app.custom is None
+    assert app.session.target.startswith("Слепой метод печати")
+    assert "Ctrl+O" in app._custom_var.get()
+    assert "shift_left" in app._kb_items                # в тексте заглавные и знаки
+    assert not app._option_box.winfo_manager()          # опции текста не нужны
+
+
+def test_opening_a_file_starts_from_its_beginning(app, tmp_path):
+    from dp_typing.words import Length
+
+    app.toggle_language()                               # английский — файл переключит
+    app.set_length(Length("words", 5))
+    _open_book(app, tmp_path)
+    assert app.mode is Mode.CUSTOM and app.lang == "ru"
+    assert app.session.target == "Мороз и солнце; день чудесный!"
+    assert "Открыт «Зимнее утро»" in notice_text(app)
+    assert app._custom_var.get().startswith("Зимнее утро · 0%")
+
+
+def test_finished_chunk_moves_the_bookmark(app, tmp_path):
+    from dp_typing.words import Length
+
+    app.set_length(Length("words", 5))
+    _open_book(app, tmp_path)
+    for ch in app.session.target:
+        press(app, ch)
+    press(app, "x")                                     # любая клавиша — дальше
+    assert app.session.target.startswith("Еще ты дремлешь")
+    assert app.custom.position > 0
+    assert not app._custom_var.get().endswith(" 0%")
+
+
+def test_esc_skips_and_tab_repeats_a_chunk(app, tmp_path):
+    from dp_typing.words import Length
+
+    app.set_length(Length("words", 5))
+    _open_book(app, tmp_path)
+    first = app.session.target
+    app.restart_test()
+    assert app.session.target == first                  # Tab — тот же кусок
+    app.skip_test()
+    assert app.session.target.startswith("Еще ты дремлешь")
+
+
+def test_timed_custom_test_resumes_mid_text(app, tmp_path):
+    from dp_typing.words import Length
+
+    app.set_length(Length("time", 15))
+    _open_book(app, tmp_path)
+    for ch in "Мороз и со":                             # «солнце» не дописано
+        press(app, ch)
+    app.session.time_limit = 0.01
+    settle(app, 400)
+    assert app.session.timed_out
+    press(app, "x")
+    assert app.session.target.startswith("солнце;")
+
+
+def test_bookmark_survives_a_restart(app, tmp_path):
+    from dp_typing.storage import load as load_profile
+    from dp_typing.words import Length
+
+    app.set_length(Length("words", 5))
+    _open_book(app, tmp_path)
+    app.skip_test()
+    app._persist()
+    restored = app._restore_custom(load_profile())
+    assert restored is not None
+    assert restored.position == app.custom.position > 0
+    assert restored.title == "Зимнее утро" and restored.lang == "ru"
+
+
+def test_language_is_fixed_by_the_open_text(app, tmp_path):
+    _open_book(app, tmp_path)
+    app.toggle_language()
+    assert app.lang == "ru"
+    assert "Ctrl+O" in notice_text(app)
+
+
+def test_bad_file_is_explained_not_crashed(app, tmp_path):
+    mode = app.mode
+    path = tmp_path / "emoji.txt"
+    path.write_text("🙂 🙂 🙂", encoding="utf-8")
+    assert not app.load_custom_file(path)
+    assert app.mode is mode
+    assert "нет текста" in notice_text(app)
+
+
+def test_ctrl_shortcuts_work_on_cyrillic_layout(app):
+    """На русской раскладке у клавиш Q и O символы «й» и «щ»."""
+    assert app.bind("<Control-Cyrillic_shcha>")
+    assert app.bind("<Control-Cyrillic_shorti>")
