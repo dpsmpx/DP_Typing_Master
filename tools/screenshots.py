@@ -110,7 +110,7 @@ def main(out: Path) -> int:
         win.new_test()
         finish(win, frozenset(errors))
 
-    win.mode, win.stage = Mode.LESSON, 1
+    win.mode = Mode.LESSON
     win._refresh_chips()
     win.new_test()
     finish(win)                                  # 100% → ступень повышается

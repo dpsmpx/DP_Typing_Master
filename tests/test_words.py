@@ -4,7 +4,6 @@ import random
 
 import pytest
 
-from dp_typing.layout import EQUIVALENTS
 from dp_typing.words import (
     MAX_WORD_LEN,
     MIN_PSEUDO_LEN,
@@ -14,7 +13,6 @@ from dp_typing.words import (
     TextSource,
     adaptive_weights,
     decorate,
-    lesson_stages,
     load_words,
     pseudo_word,
     words_for_zone,
@@ -81,26 +79,7 @@ def test_pseudo_generation_is_reproducible():
     assert a == b
 
 
-# ------------------------------------------------------------------- уроки
-
-@pytest.mark.parametrize("lang", ["ru", "en"])
-def test_lesson_stages_widen_monotonically(lang):
-    stages = lesson_stages(lang)
-    assert len(stages) >= 4
-    sizes = [len(set(keys)) for _, keys in stages]
-    assert sizes == sorted(sizes), "ступени должны расширяться, а не сужаться"
-
-
-@pytest.mark.parametrize("lang", ["ru", "en"])
-def test_lesson_phrase_stays_inside_its_zone(lang, rng):
-    """Урок не имеет права подсунуть клавишу, которую ещё не проходили."""
-    for stage, (_title, keys) in enumerate(lesson_stages(lang)):
-        source = TextSource(lang, Mode.LESSON, stage=stage, rng=rng)
-        # «ё» засчитывается нажатием «е», поэтому сворачиваем эквиваленты.
-        folds = {ch: alts[0] for ch, alts in EQUIVALENTS[lang].items()}
-        used = {folds.get(ch, ch) for ch in source.phrase(40).replace(" ", "")}
-        assert used <= set(keys), f"ступень {stage}: лишние клавиши {used - set(keys)}"
-
+# ------------------------------------------------------------ слова по буквам
 
 def test_yo_words_reach_lessons_through_e():
     """Слово с «ё» годится для зоны с «е»: печатать его можно через «е»."""
@@ -114,13 +93,6 @@ def test_zone_words_are_filtered_correctly():
     pool = words_for_zone("ru", "фывапролдж")
     assert pool, "домашний ряд обязан давать хоть какие-то слова"
     assert all(set(w) <= set("фывапролдж") for w in pool)
-
-
-def test_narrow_zone_falls_back_to_synthetic(rng):
-    """Для «fghj» реальных английских слов нет — нужен запасной генератор."""
-    assert words_for_zone("en", "fghj") == ()
-    phrase = TextSource("en", Mode.LESSON, stage=0, rng=rng).phrase(6)
-    assert phrase and set(phrase.replace(" ", "")) <= set("fghj")
 
 
 # ---------------------------------------------------------------- адаптив
@@ -239,7 +211,7 @@ def test_decorated_text_is_typeable_on_the_layout(lang, rng):
 
 
 def test_lessons_ignore_text_options(rng):
-    source = TextSource("ru", Mode.LESSON, stage=1, rng=rng, options=ALL_ON)
+    source = TextSource("ru", Mode.LESSON, rng=rng, options=ALL_ON)
     phrase = source.phrase(30)
     assert phrase == phrase.lower()
     assert not any(ch in phrase for ch in ".,!?0123456789")

@@ -29,6 +29,18 @@ from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
 from . import __version__, theme
+from .course import (
+    DEFAULT_TARGET_WPM,
+    MIN_SAMPLES,
+    START_LETTERS,
+    TARGET_SPEEDS_WPM,
+    all_mastered,
+    clamp_unlocked,
+    confidence,
+    focus_letter,
+    letter_order,
+    target_cpm,
+)
 from .customtext import CustomText, CustomTextError, sample
 from .engine import Mark, Profile, TypingSession
 from .fmt import count, wrap_words
@@ -45,7 +57,7 @@ from .storage import load as load_profile
 from .storage import load_custom_text, save_custom_text
 from .storage import restore as restore_profile
 from .storage import save as save_profile
-from .words import LENGTHS, Length, Mode, TextOptions, TextSource, lesson_stages
+from .words import LENGTHS, Length, Mode, TextOptions, TextSource
 
 #: Период обновления метрик во время теста, мс.
 TICK_MS = 200
@@ -54,8 +66,6 @@ ANIM_FRAMES = 8
 ANIM_STEP_MS = 28
 #: Сколько строк текста видно сразу; длинный тест прокручивается построчно.
 VISIBLE_LINES = 3
-#: Точность, с которой урок повышает ступень.
-STAGE_UP_ACCURACY = 96.0
 #: Сколько ждать второго F7: сброс всей статистики только с подтверждением.
 RESET_CONFIRM_MS = 3000
 #: Сколько держится предупреждение о раскладке или Caps Lock после
@@ -162,7 +172,11 @@ class TypingApp(tk.Tk):
             self.mode = Mode(saved.get("mode", Mode.COMMON.value))
         except ValueError:
             self.mode = Mode.COMMON
-        self.stage: int = int(saved.get("stage", 0) or 0)
+        # Курс: сколько букв открыто в каждом языке и целевая скорость.
+        course = saved.get("course") if isinstance(saved.get("course"), dict) else {}
+        self.course = {lang: clamp_unlocked(lang, course.get(lang)) for lang in LAYOUTS}
+        wpm = saved.get("course_target_wpm")
+        self.course_target_wpm = wpm if wpm in TARGET_SPEEDS_WPM else DEFAULT_TARGET_WPM
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
         self.length = Length.parse(saved.get("length"))
@@ -170,7 +184,7 @@ class TypingApp(tk.Tk):
                                    punct=bool(saved.get("punct", False)),
                                    digits=bool(saved.get("digits", False)))
 
-        self.source = TextSource(self.lang, self.mode, self.stage, self.rng, self.options)
+        self.source = TextSource(self.lang, self.mode, self.rng, self.options)
         # Свой текст (Ctrl+O) и закладка в нём; пока не открыт — встроенный пример.
         self.custom = self._restore_custom(saved)
         self._samples: dict[str, CustomText] = {}
@@ -316,7 +330,7 @@ class TypingApp(tk.Tk):
         self._chips: list[tk.Label] = []
         for var, cmd in ((self.lang_var, self.toggle_language),
                          (self.mode_var, self.cycle_mode),
-                         (self.stage_var, self.next_stage)):
+                         (self.stage_var, self._show_course_menu)):
             chip = tk.Label(chips, textvariable=var, bg=theme.PANEL, fg=theme.TEXT_DIM,
                             font=self.f_chip, padx=self.px(10), pady=self.px(4),
                             cursor="hand2")
@@ -334,6 +348,14 @@ class TypingApp(tk.Tk):
                                      padx=self.px(8), pady=self.px(2), cursor="hand2")
         self._length_chip.pack(side="left", padx=(0, self.px(12)))
         self._length_chip.bind("<Button-1>", self._show_length_menu)
+        # Курс: буквы в порядке открытия, цветом — насколько освоена каждая.
+        self._course_strip = tk.Text(self._options_bar, height=1, width=1, bg=theme.BG,
+                                     borderwidth=0, highlightthickness=0, font=self.f_chip,
+                                     cursor="arrow", takefocus=0, wrap="none")
+        for tag, color in (("locked", theme.KEY_LOCKED_FG), ("new", theme.TEXT),
+                           ("learning", theme.WARN), ("mastered", theme.GOOD)):
+            self._course_strip.tag_configure(tag, foreground=color)
+        self._course_strip.tag_configure("focus", background=theme.ACCENT, foreground="#ffffff")
         self._custom_var = tk.StringVar()
         self._custom_label = tk.Label(self._options_bar, textvariable=self._custom_var,
                                       bg=theme.BG, fg=theme.TEXT_DIM, font=self.f_hint)
@@ -488,7 +510,7 @@ class TypingApp(tk.Tk):
             ("Tab", "начать эту фразу заново"),
             ("F2", "язык: русский / английский"),
             ("F3", "режим тренировки"),
-            ("F4 / Shift+F4", "ступень урока вперёд / назад"),
+            ("F4 / Shift+F4", "курс: открыть следующую букву / убрать последнюю"),
             ("F5", "строгий режим (не пускает дальше при ошибке)"),
             ("F6", "показать / скрыть экранную клавиатуру"),
             ("F7 дважды", "сбросить всю накопленную статистику"),
@@ -759,7 +781,10 @@ class TypingApp(tk.Tk):
         """Собрать новую фразу и начать тест."""
         self._absorb_abandoned()
         self._stop_tick()
-        self.source.lang, self.source.mode, self.source.stage = self.lang, self.mode, self.stage
+        self.source.lang, self.source.mode = self.lang, self.mode
+        if self.mode is Mode.LESSON:
+            self.source.letters = self._course_letters()
+            self.source.focus = self._course_focus()
         if self.mode is Mode.CUSTOM:
             self._custom_chunk = self._custom_source().chunk(self.length)
             self._start_session(self._custom_chunk)
@@ -969,11 +994,12 @@ class TypingApp(tk.Tk):
         )
         self.result_var.set("  ·  ".join(parts))
 
-        if (self.mode is Mode.LESSON and metrics.accuracy >= STAGE_UP_ACCURACY
-                and self.stage < len(lesson_stages(self.lang)) - 1):
-            self.stage += 1
+        if self.mode is Mode.LESSON:
+            opened = self._course_progress()
+            if opened:
+                self.result_var.set(self.result_var.get() + f"  →  новая буква «{opened}»")
             self._refresh_chips()
-            self.result_var.set(self.result_var.get() + f"  →  {self.source.stage_title}")
+            self._refresh_course_keys()
 
         if self.mode is Mode.CUSTOM:
             self._advance_custom(session.pos, finished=not session.timed_out)
@@ -1336,7 +1362,6 @@ class TypingApp(tk.Tk):
         self._hot_key = self._hot_shift = None
         self._kb_full_drawn = self._kb_full
 
-        layout = LAYOUTS[self.lang]
         rows = self._keyboard_rows()
         width, height = c.winfo_width(), c.winfo_height()
         if width <= 1 or height <= 1:
@@ -1364,10 +1389,10 @@ class TypingApp(tk.Tk):
             x = (width - sum(widths) - gap * (len(row) - 1)) / 2
             y = top + r * (kh + gap)
             for (name, text, _, small), w in zip(row, widths):
-                base_bg = theme.KEY_HOME_BG if name in layout.anchors else theme.KEY_BG
+                base_bg, base_fg = self._key_base(name)
                 rect = c.create_rectangle(x, y, x + w, y + kh, fill=base_bg, width=0)
                 label = c.create_text(x + w / 2, y + kh / 2, text=text,
-                                      fill=theme.KEY_FG, font=label_font)
+                                      fill=base_fg, font=label_font)
                 self._kb_items[name] = (rect, label)
                 if small and small_labels:
                     self._kb_small[name] = c.create_text(
@@ -1375,6 +1400,7 @@ class TypingApp(tk.Tk):
                         fill=theme.TEXT_FAINT, font=self.f_key_small)
                 x += w + gap
         self._update_next_key()
+        self._refresh_course_keys()
 
     def _paint_key(self, name: str | None, hot: bool) -> None:
         if name is None or name not in self._kb_items:
@@ -1383,8 +1409,8 @@ class TypingApp(tk.Tk):
         if hot:
             bg, fg, small = theme.KEY_NEXT_BG, theme.KEY_NEXT_FG, theme.KEY_NEXT_FG
         else:
-            bg = theme.KEY_HOME_BG if name in LAYOUTS[self.lang].anchors else theme.KEY_BG
-            fg, small = theme.KEY_FG, theme.TEXT_FAINT
+            bg, fg = self._key_base(name)
+            small = theme.TEXT_FAINT
         self.kb_canvas.itemconfigure(rect, fill=bg)
         self.kb_canvas.itemconfigure(label, fill=fg)
         if name in self._kb_small:
@@ -1427,7 +1453,6 @@ class TypingApp(tk.Tk):
             self._show_notice("Язык задаёт открытый текст — Ctrl+O откроет другой")
             return
         self.lang = "en" if self.lang == "ru" else "ru"
-        self.stage = min(self.stage, len(lesson_stages(self.lang)) - 1)
         self._refresh_chips()
         self._layout_keyboard()
         self.new_test()
@@ -1444,18 +1469,109 @@ class TypingApp(tk.Tk):
         self._step_stage(-1)
 
     def _step_stage(self, step: int) -> None:
-        """F4 вне уроков открывает уроки на текущей ступени; внутри — листает
-        ступени, не перескакивая с последней на первую."""
+        """F4 вне курса открывает курс там, где остановились; в курсе — вручную
+        открывает следующую букву или убирает последнюю."""
         if self.mode is not Mode.LESSON:
             self.mode = Mode.LESSON
         else:
-            target = self.stage + step
-            if not 0 <= target < len(lesson_stages(self.lang)):
-                self._show_notice("Это последняя ступень" if step > 0 else "Это первая ступень")
+            target = self.course[self.lang] + step
+            if target > len(letter_order(self.lang)):
+                self._show_notice("Открыты все буквы")
                 return
-            self.stage = target
+            if target < START_LETTERS:
+                self._show_notice("Это начало курса")
+                return
+            self.course[self.lang] = target
         self._refresh_chips()
+        self._refresh_course_keys()
         self.new_test()
+
+    # ------------------------------------------------------------------ курс
+
+    def _course_letters(self) -> str:
+        return letter_order(self.lang)[:self.course[self.lang]]
+
+    def _course_focus(self) -> str:
+        return focus_letter(self.profile, self._course_letters(),
+                            target_cpm(self.course_target_wpm))
+
+    def _course_progress(self) -> str | None:
+        """Открыть следующую букву, если каждая открытая освоена. Возвращает её."""
+        letters = self._course_letters()
+        order = letter_order(self.lang)
+        if (len(letters) < len(order)
+                and all_mastered(self.profile, letters, target_cpm(self.course_target_wpm))):
+            self.course[self.lang] += 1
+            return order[len(letters)]
+        return None
+
+    def set_course_target(self, wpm: int) -> None:
+        self.course_target_wpm = wpm
+        self._refresh_chips()
+        self._refresh_course_keys()
+        self._persist()
+
+    def _show_course_menu(self) -> None:
+        """Чип курса: открыть/убрать букву вручную и выбрать целевую скорость."""
+        menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_HI, fg=theme.TEXT,
+                       activebackground=theme.ACCENT, activeforeground="#ffffff",
+                       selectcolor=theme.ACCENT, font=self.f_hint, borderwidth=0)
+        menu.add_command(label="Открыть следующую букву  (F4)", command=self.next_stage)
+        menu.add_command(label="Убрать последнюю букву  (Shift+F4)", command=self.prev_stage)
+        menu.add_separator()
+        self._target_choice = tk.IntVar(value=self.course_target_wpm)
+        for wpm in TARGET_SPEEDS_WPM:
+            menu.add_radiobutton(label=f"Цель: {wpm} слов/мин", value=wpm,
+                                 variable=self._target_choice,
+                                 command=lambda w=wpm: self.set_course_target(w))
+        chip = self._chips[2]
+        try:
+            menu.tk_popup(chip.winfo_rootx(), chip.winfo_rooty() + chip.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def _refresh_course_strip(self) -> None:
+        """Полоса букв курса: цвет — освоенность, синий фон — фокус."""
+        strip = self._course_strip
+        letters = self._course_letters()
+        order = letter_order(self.lang)
+        focus = self._course_focus()
+        target = target_cpm(self.course_target_wpm)
+        strip.configure(state="normal", width=2 * len(order))
+        strip.delete("1.0", "end")
+        for ch in order:
+            if ch not in letters:
+                tag = "locked"
+            elif self.profile.key_samples.get(ch, 0) < MIN_SAMPLES:
+                tag = "new"
+            elif confidence(self.profile, ch, target) >= 1:
+                tag = "mastered"
+            else:
+                tag = "learning"
+            strip.insert("end", ch, (tag, "focus") if ch == focus else (tag,))
+            strip.insert("end", " ")
+        strip.configure(state="disabled")
+
+    def _key_base(self, name: str) -> tuple[str, str]:
+        """Цвета клавиши в покое: в курсе всё, кроме открытых букв, приглушено."""
+        layout = LAYOUTS[self.lang]
+        if (self.mode is Mode.LESSON and len(name) == 1 and name != " "
+                and name not in self._course_letters()
+                and not (name == "ё" and "е" in self._course_letters())):
+            return theme.KEY_LOCKED_BG, theme.KEY_LOCKED_FG
+        return (theme.KEY_HOME_BG if name in layout.anchors else theme.KEY_BG), theme.KEY_FG
+
+    def _refresh_course_keys(self) -> None:
+        """Перекрасить буквы клавиатуры под курс и обвести фокусную."""
+        if not self._kb_items:
+            return
+        focus = self._course_focus() if self.mode is Mode.LESSON else None
+        for name, (rect, _label) in self._kb_items.items():
+            if name not in (self._hot_key, self._hot_shift):
+                self._paint_key(name, False)
+            outline = theme.ACCENT if name == focus else ""
+            self.kb_canvas.itemconfigure(rect, outline=outline,
+                                         width=self.px(2) if outline else 0)
 
     def toggle_strict(self) -> None:
         self.strict = not self.strict
@@ -1504,9 +1620,8 @@ class TypingApp(tk.Tk):
     def _refresh_chips(self) -> None:
         self.lang_var.set("РУССКИЙ" if self.lang == "ru" else "ENGLISH")
         self.mode_var.set(self.mode.title.upper())
-        stages = lesson_stages(self.lang)
-        idx = min(self.stage, len(stages) - 1)
-        self.stage_var.set(f"УРОК {idx + 1}/{len(stages)} · {stages[idx][0]}")
+        self.stage_var.set(f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
+                           f" · ФОКУС «{self._course_focus().upper()}»  ▾")
         if len(self._chips) == 3:
             # Ступень имеет смысл только в режиме уроков: вне их чип скрыт, а
             # не приглушён — клик по приглушённому молча менял режим.
@@ -1516,7 +1631,7 @@ class TypingApp(tk.Tk):
                 chip.pack(side="left", padx=(0, self.px(8)))
             elif not in_lesson and chip.winfo_manager():
                 chip.pack_forget()
-        self.source.lang, self.source.mode, self.source.stage = self.lang, self.mode, self.stage
+        self.source.lang, self.source.mode = self.lang, self.mode
         self.source.options = self.options
         self.length_var.set(f"{self.length.title} ▾")
         if hasattr(self, "_extra_caption"):
@@ -1524,6 +1639,7 @@ class TypingApp(tk.Tk):
         self._refresh_option_chips()
         self._refresh_session_line()
         self._sync_keyboard_kind()
+        self._refresh_course_keys()    # в курсе закрытые буквы приглушены
 
     def _refresh_extra_tile(self) -> None:
         """Шестая плитка: обратный отсчёт или счётчик слов; во фразе её нет."""
@@ -1590,6 +1706,13 @@ class TypingApp(tk.Tk):
             self._option_box.pack(side="left")
         elif not visible and self._option_box.winfo_manager():
             self._option_box.pack_forget()
+        lesson = self.mode is Mode.LESSON
+        if lesson:
+            self._refresh_course_strip()
+        if lesson and not self._course_strip.winfo_manager():
+            self._course_strip.pack(side="left")
+        elif not lesson and self._course_strip.winfo_manager():
+            self._course_strip.pack_forget()
         custom = self.mode is Mode.CUSTOM
         if custom:
             self._refresh_custom_label()
@@ -1638,7 +1761,8 @@ class TypingApp(tk.Tk):
         save_profile(self.profile, {
             "lang": self.lang,
             "mode": self.mode.value,
-            "stage": self.stage,
+            "course": dict(self.course),
+            "course_target_wpm": self.course_target_wpm,
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
             "length": self.length.key,

@@ -494,21 +494,24 @@ def test_stage_chip_only_in_lessons(app):
     assert app._chips[2].winfo_ismapped()
 
 
-def test_f4_enters_lessons_and_does_not_wrap(app):
-    """A-15: F4 с последней ступени не прыгает на первую."""
-    from dp_typing.words import lesson_stages
+def test_f4_enters_the_course_and_does_not_wrap(app):
+    """A-15: F4 вне курса открывает курс; в курсе — по букве, без «по кругу»."""
+    from dp_typing.course import START_LETTERS, letter_order
 
-    last = len(lesson_stages(app.lang)) - 1
-    app.mode, app.stage = Mode.COMMON, last
+    total = len(letter_order(app.lang))
+    app.mode = Mode.COMMON
+    app.course[app.lang] = total
     app.next_stage()
-    assert app.mode is Mode.LESSON and app.stage == last    # просто вошли в уроки
+    assert app.mode is Mode.LESSON and app.course[app.lang] == total   # просто вошли
     app.next_stage()
-    assert app.stage == last
-    assert "последняя" in notice_text(app)
-    app.stage = 0
+    assert app.course[app.lang] == total
+    assert "все буквы" in notice_text(app)
+    app.course[app.lang] = START_LETTERS
     app.prev_stage()
-    assert app.stage == 0
-    assert "первая" in notice_text(app)
+    assert app.course[app.lang] == START_LETTERS
+    assert "начало курса" in notice_text(app)
+    app.next_stage()
+    assert app.course[app.lang] == START_LETTERS + 1
 
 
 # ----------------------------------------------------------- мелкие правки
@@ -967,3 +970,91 @@ def test_ctrl_shortcuts_work_on_cyrillic_layout(app):
     """На русской раскладке у клавиш Q и O символы «й» и «щ»."""
     assert app.bind("<Control-Cyrillic_shcha>")
     assert app.bind("<Control-Cyrillic_shorti>")
+
+
+# ------------------------------------------------------------ курс (keybr)
+
+def _enter_course(app):
+    app.mode = Mode.LESSON
+    app._refresh_chips()
+    app.new_test()
+    settle(app, 300)
+
+
+def test_course_text_uses_open_letters_only(app):
+    from dp_typing.course import START_LETTERS
+
+    _enter_course(app)
+    letters = app._course_letters()
+    assert len(letters) == START_LETTERS
+    used = set(app.session.target.replace(" ", "")) - {"ё"}
+    assert used <= set(letters)
+    assert "КУРС 6/" in app.stage_var.get() and "ФОКУС" in app.stage_var.get()
+
+
+def test_locked_keys_are_dimmed_and_focus_is_outlined(app):
+    _enter_course(app)
+    letters = app._course_letters()
+    locked = next(ch for ch in "фщъ" if ch not in letters)
+    rect, label = app._kb_items[locked]
+    assert app.kb_canvas.itemcget(rect, "fill") == theme.KEY_LOCKED_BG
+    assert app.kb_canvas.itemcget(label, "fill") == theme.KEY_LOCKED_FG
+    focus = app._course_focus()
+    focus_rect, _ = app._kb_items[focus]
+    assert app.kb_canvas.itemcget(focus_rect, "outline") == theme.ACCENT
+    # Вне курса никаких приглушённых клавиш и рамок.
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app._layout_keyboard()
+    assert app.kb_canvas.itemcget(app._kb_items[locked][0], "fill") != theme.KEY_LOCKED_BG
+    assert app.kb_canvas.itemcget(app._kb_items[focus][0], "outline") == ""
+
+
+def test_course_strip_shows_progress(app):
+    _enter_course(app)
+    assert app._course_strip.winfo_manager()
+    strip = app._course_strip
+    focus = app._course_focus()
+    index = strip.search(focus, "1.0")
+    assert "focus" in strip.tag_names(index)
+    assert "locked" in strip.tag_names(strip.search("ф", "1.0"))
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    assert not app._course_strip.winfo_manager()
+
+
+def test_mastering_every_letter_opens_the_next(app):
+    """Ступень растёт не от одной удачной фразы, а когда каждая буква быстра
+    и точна (A-15)."""
+    from dp_typing.course import MIN_SAMPLES, letter_order, target_cpm
+
+    _enter_course(app)
+    target = target_cpm(app.course_target_wpm)
+    for ch in app._course_letters():
+        app.profile.key_speed[ch] = target * 2
+        app.profile.key_acc[ch] = 1.0
+        app.profile.key_samples[ch] = MIN_SAMPLES * 3
+    before = len(app._course_letters())
+    for ch in app.session.target:
+        press(app, ch)
+    assert len(app._course_letters()) == before + 1
+    new = letter_order(app.lang)[before]
+    assert f"новая буква «{new}»" in app.result_var.get()
+
+
+def test_slow_letters_keep_the_course_where_it_is(app):
+    _enter_course(app)
+    before = len(app._course_letters())
+    for ch in app.session.target:
+        press(app, ch)
+    assert len(app._course_letters()) == before
+
+
+def test_course_target_speed_is_saved(app, tmp_path):
+    import json
+
+    _enter_course(app)
+    app.set_course_target(45)
+    saved = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
+    assert saved["course_target_wpm"] == 45
+    assert saved["course"][app.lang] == len(app._course_letters())

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 
-from .layout import EQUIVALENTS, LAYOUTS
+from .layout import EQUIVALENTS
 
 MIN_WORD_LEN = 2
 MAX_WORD_LEN = 12
@@ -42,7 +42,7 @@ class Mode(str, Enum):
 
 
 _MODE_TITLES = {
-    Mode.LESSON: "Уроки",
+    Mode.LESSON: "Курс",
     Mode.COMMON: "Частотные слова",
     Mode.PSEUDO: "Псевдослова",
     Mode.ADAPTIVE: "Слабые клавиши",
@@ -133,25 +133,9 @@ def pseudo_word(lang: str, rng: random.Random, *, allowed: frozenset[str] | None
     return rng.choice(load_words(lang))
 
 
-# ------------------------------------------------------------ уроки по зонам
+# --------------------------------------------------------- слова по буквам
 
-@lru_cache(maxsize=8)
-def lesson_stages(lang: str) -> tuple[tuple[str, str], ...]:
-    """Ступени уроков: (название, разрешённые символы), от простого к полному."""
-    layout = LAYOUTS[lang]
-    home, top = layout.home, layout.top
-    mid = len(home) // 2
-    # Каждая ступень строго включает предыдущую: пройденные клавиши
-    # никогда не исчезают из тренировки.
-    return (
-        ("Центр домашнего ряда", home[mid - 2 : mid + 2]),
-        ("Домашний ряд", home),
-        ("Домашний + верхний", home + top),
-        ("Весь алфавит", layout.letters),
-    )
-
-
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=64)
 def words_for_zone(lang: str, allowed: str) -> tuple[str, ...]:
     """Слова, целиком укладывающиеся в заданный набор клавиш.
 
@@ -168,12 +152,6 @@ def words_for_zone(lang: str, allowed: str) -> tuple[str, ...]:
         )
 
     return tuple(w for w in load_words(lang) if fits(w))
-
-
-def _synthetic_zone_words(allowed: str, rng: random.Random, count: int) -> list[str]:
-    """Запасной вариант для узких зон, где реальных слов почти нет."""
-    keys = sorted(set(allowed))
-    return ["".join(rng.choice(keys) for _ in range(rng.randint(3, 5))) for _ in range(count)]
 
 
 # ---------------------------------------------------------- адаптивный отбор
@@ -332,27 +310,25 @@ LENGTHS: tuple[Length, ...] = (
 # --------------------------------------------------------------- фасад
 
 class TextSource:
-    """Выдаёт фразы по текущему режиму, языку и ступени урока."""
+    """Выдаёт фразы по текущему режиму, языку и набору букв курса."""
 
     def __init__(self, lang: str = "ru", mode: Mode = Mode.COMMON,
-                 stage: int = 0, rng: random.Random | None = None,
-                 options: TextOptions | None = None) -> None:
+                 rng: random.Random | None = None,
+                 options: TextOptions | None = None,
+                 letters: str = "", focus: str = "") -> None:
         self.lang = lang
         self.mode = mode
-        self.stage = stage
         self.rng = rng or random.Random()
         self.options = options or TextOptions()
+        #: Курс: открытые буквы и фокусная (пусто — начало курса).
+        self.letters = letters
+        self.focus = focus
 
     @property
     def decorates(self) -> bool:
         """Опции текста — только для генерируемых слов: в уроках свои ступени
         клавиш, а свой текст уже содержит и заглавные, и знаки."""
         return self.mode in (Mode.COMMON, Mode.PSEUDO, Mode.ADAPTIVE) and self.options.any
-
-    @property
-    def stage_title(self) -> str:
-        stages = lesson_stages(self.lang)
-        return stages[min(self.stage, len(stages) - 1)][0]
 
     def phrase(self, word_count: int = 9, weak: Sequence[tuple[str, float]] = ()) -> str:
         """Собрать фразу из ``word_count`` слов."""
@@ -367,12 +343,11 @@ class TextSource:
             return [pseudo_word(self.lang, rng) for _ in range(n)]
 
         if self.mode is Mode.LESSON:
-            stages = lesson_stages(self.lang)
-            allowed = stages[min(self.stage, len(stages) - 1)][1]
-            pool = words_for_zone(self.lang, allowed)
-            if len(pool) < 8:
-                return _synthetic_zone_words(allowed, rng, n)
-            return rng.choices(pool, k=n)
+            # Курс импортирует этот модуль, поэтому импорт — здесь.
+            from .course import START_LETTERS, course_words, letter_order
+
+            letters = self.letters or letter_order(self.lang)[:START_LETTERS]
+            return course_words(self.lang, letters, self.focus or letters[-1], n, rng)
 
         pool = load_words(self.lang)
         if self.mode is Mode.ADAPTIVE and weak:
