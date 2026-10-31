@@ -21,6 +21,7 @@ from __future__ import annotations
 import random
 import tkinter as tk
 from contextlib import suppress
+from dataclasses import dataclass
 from tkinter import font as tkfont
 
 from . import __version__, theme
@@ -44,6 +45,40 @@ WORDS_PER_TEST = 9
 STAGE_UP_ACCURACY = 96.0
 
 MODE_ORDER = (Mode.LESSON, Mode.COMMON, Mode.PSEUDO, Mode.ADAPTIVE)
+
+#: Внешний отступ основной колонки по вертикали.
+BODY_PADY = 14
+
+
+@dataclass(frozen=True)
+class Density:
+    """Размеры интерфейса. Компактная плотность включается, когда содержимое
+    не помещается в окно по высоте (маленькое окно или фраза в 3+ строки)."""
+
+    target: int          # кегль фразы
+    stat: int            # кегль чисел в плитках
+    combo: int
+    combo_big: int
+    result: int
+    combo_h: int         # высота холста комбо
+    kb_h: int            # высота холста клавиатуры
+    text_pady: int
+    line_above: int      # spacing1 у Text: воздух над строкой
+    line_below: int      # spacing3 у Text: воздух под строкой
+    result_pady: int
+    tile_pady: int
+    gap: int             # базовый вертикальный зазор между секциями
+
+
+NORMAL = Density(target=22, stat=21, combo=26, combo_big=31, result=13,
+                 combo_h=74, kb_h=150, text_pady=24, line_above=6, line_below=10,
+                 result_pady=16, tile_pady=10, gap=12)
+COMPACT = Density(target=18, stat=16, combo=20, combo_big=24, result=12,
+                  combo_h=56, kb_h=100, text_pady=12, line_above=3, line_below=6,
+                  result_pady=8, tile_pady=5, gap=5)
+
+#: Ниже этой высоты холста клавиши стали бы нечитаемыми (4 ряда по ~13 px).
+KB_MIN_H = 64
 
 
 def _lerp_hex(a: str, b: str, t: float) -> str:
@@ -86,18 +121,26 @@ class TypingApp(tk.Tk):
         self._next_id: str | None = None
         self._anim_id: str | None = None
         self._resize_id: str | None = None
+        self._fit_id: str | None = None
         self._anim_frame = 0
         self._anim_ramp: tuple[str, ...] = ()
         self._fade_cache: dict[tuple[str, str], tuple[str, ...]] = {}
         self._stat_cache: dict[str, tuple] = {}
         self._kb_items: dict[str, tuple[int, int]] = {}
-        self._kb_width = 0
+        self._kb_size = (0, 0)
         self._hot_key: str | None = None
         # Ширины холстов кэшируются: winfo_width() — обращение к Tk, а в
         # горячем пути оно вызывалось на каждое нажатие.
         self._combo_w = 0
+        self._combo_h = NORMAL.combo_h
         self._progress_w = 0
         self._caret_pos: int | None = None
+        # Тег каретки: обычный или «ошибка под кареткой» (строгий режим).
+        self._caret_tag = "caret"
+        # Плотность интерфейса и оценка, сколько пикселей экономит компактная.
+        self.density = NORMAL
+        self._compact_saving = 0
+        self._win_size = (0, 0)
         self._text_width = 0
         self._combo_tier = None
         self._pulsed_tier = None
@@ -108,6 +151,7 @@ class TypingApp(tk.Tk):
         self._bind_keys()
 
         self.protocol("WM_DELETE_WINDOW", self._quit)
+        self.bind("<Configure>", self._on_window_configure)
         # Фокус на само окно: клавиши ловит корневая привязка,
         # отдельного поля ввода в приложении нет.
         self.focus_set()
@@ -119,19 +163,21 @@ class TypingApp(tk.Tk):
         available = set(tkfont.families(self))
         mono = theme.pick_family(available, theme.MONO_FAMILIES)
         ui = theme.pick_family(available, theme.UI_FAMILIES)
-        self.f_target = tkfont.Font(family=mono, size=22)
-        self.f_stat = tkfont.Font(family=ui, size=21, weight="bold")
+        d = self.density
+        self.f_target = tkfont.Font(family=mono, size=d.target)
+        self.f_stat = tkfont.Font(family=ui, size=d.stat, weight="bold")
         self.f_caption = tkfont.Font(family=ui, size=9)
         self.f_chip = tkfont.Font(family=ui, size=10, weight="bold")
         self.f_hint = tkfont.Font(family=ui, size=9)
-        self.f_combo = tkfont.Font(family=ui, size=26, weight="bold")
-        self.f_combo_big = tkfont.Font(family=ui, size=31, weight="bold")
+        self.f_combo = tkfont.Font(family=ui, size=d.combo, weight="bold")
+        self.f_combo_big = tkfont.Font(family=ui, size=d.combo_big, weight="bold")
         self.f_key = tkfont.Font(family=mono, size=10)
-        self.f_result = tkfont.Font(family=ui, size=13, weight="bold")
+        self.f_result = tkfont.Font(family=ui, size=d.result, weight="bold")
 
     def _build_ui(self) -> None:
-        root = tk.Frame(self, bg=theme.BG)
-        root.pack(fill="both", expand=True, padx=18, pady=14)
+        self.body = tk.Frame(self, bg=theme.BG)
+        self.body.pack(fill="both", expand=True, padx=18, pady=BODY_PADY)
+        root = self.body
 
         self._build_header(root)
         self._build_stats(root)
@@ -140,10 +186,14 @@ class TypingApp(tk.Tk):
         self._build_keyboard(root)
         self._build_footer(root)
         self._build_help()
+        self._apply_density()
+        if self.show_keyboard:
+            self._pack_keyboard()
 
     def _build_header(self, parent: tk.Frame) -> None:
         bar = tk.Frame(parent, bg=theme.BG)
-        bar.pack(fill="x", pady=(0, 12))
+        bar.pack(fill="x")
+        self._header_bar = bar
 
         tk.Label(bar, text="DP TYPING MASTER", bg=theme.BG, fg=theme.TEXT,
                  font=self.f_chip).pack(side="left")
@@ -166,17 +216,19 @@ class TypingApp(tk.Tk):
         # Итоги сессии — отдельной строкой: в один ряд с чипами они не влезали
         # и обрезали название ступени.
         self.session_var = tk.StringVar()
-        tk.Label(parent, textvariable=self.session_var, bg=theme.BG,
-                 fg=theme.TEXT_DIM, font=self.f_hint, anchor="e").pack(
-                     fill="x", pady=(0, 10))
+        self._session_label = tk.Label(parent, textvariable=self.session_var, bg=theme.BG,
+                                       fg=theme.TEXT_DIM, font=self.f_hint, anchor="e")
+        self._session_label.pack(fill="x")
         self._refresh_chips()
 
     def _build_stats(self, parent: tk.Frame) -> None:
         row = tk.Frame(parent, bg=theme.BG)
-        row.pack(fill="x", pady=(0, 10))
+        row.pack(fill="x")
+        self._stats_row = row
 
         self.stat_vars: dict[str, tk.StringVar] = {}
         self.stat_labels: dict[str, tk.Label] = {}
+        self._tile_parts: list[tuple[tk.Label, tk.Label]] = []
         for key, caption in (("wpm", "СЛОВ/МИН"), ("cpm", "ЗНАКОВ/МИН"),
                              ("acc", "ТОЧНОСТЬ"), ("err", "ОШИБКИ"),
                              ("best", "РЕКОРД WPM")):
@@ -185,14 +237,16 @@ class TypingApp(tk.Tk):
             var = tk.StringVar(value="0")
             value = tk.Label(tile, textvariable=var, bg=theme.PANEL, fg=theme.TEXT,
                              font=self.f_stat, anchor="w")
-            value.pack(fill="x", padx=14, pady=(10, 0))
-            tk.Label(tile, text=caption, bg=theme.PANEL, fg=theme.TEXT_FAINT,
-                     font=self.f_caption, anchor="w").pack(fill="x", padx=14, pady=(0, 10))
+            value.pack(fill="x", padx=14)
+            cap = tk.Label(tile, text=caption, bg=theme.PANEL, fg=theme.TEXT_FAINT,
+                           font=self.f_caption, anchor="w")
+            cap.pack(fill="x", padx=14)
             self.stat_vars[key] = var
             self.stat_labels[key] = value
+            self._tile_parts.append((value, cap))
 
         self.progress = tk.Canvas(parent, height=3, bg=theme.PANEL, highlightthickness=0)
-        self.progress.pack(fill="x", pady=(0, 14))
+        self.progress.pack(fill="x")
         self._progress_bar = self.progress.create_rectangle(
             0, 0, 0, 3, fill=theme.ACCENT, width=0
         )
@@ -207,7 +261,8 @@ class TypingApp(tk.Tk):
         self.text = tk.Text(
             wrap, bg=theme.PANEL, fg=theme.PENDING, font=self.f_target,
             wrap="word", relief="flat", highlightthickness=0, borderwidth=0,
-            padx=28, pady=24, spacing1=6, spacing3=10, cursor="arrow",
+            padx=28, pady=self.density.text_pady, spacing1=self.density.line_above,
+            spacing3=self.density.line_below, cursor="arrow",
             insertofftime=0, insertwidth=0, takefocus=0,
             # Text по умолчанию просит 24 строки — при кегле 22 это выше всего
             # окна, и pack не оставил бы места клавиатуре. Просим минимум,
@@ -222,16 +277,20 @@ class TypingApp(tk.Tk):
         self.text.tag_configure("ok", foreground=theme.CORRECT)
         self.text.tag_configure("bad", foreground=theme.WRONG_FG, background=theme.WRONG_BG)
         self.text.tag_configure("caret", background=theme.CARET, foreground=theme.BG)
+        # Создан последним — значит, приоритетнее и "bad", и "caret": в строгом
+        # режиме ошибка стоит под кареткой, и без этого тега её было не видно.
+        self.text.tag_configure("caret_bad", background=theme.CARET_BAD, foreground=theme.BG)
         self.text.configure(state="disabled")
 
         self.result_var = tk.StringVar()
         self.result_label = tk.Label(wrap, textvariable=self.result_var, bg=theme.PANEL,
                                      fg=theme.GOOD, font=self.f_result)
-        self.result_label.pack(pady=(0, 16))
+        self.result_label.pack()
 
     def _build_combo(self, parent: tk.Frame) -> None:
-        self.combo_canvas = tk.Canvas(parent, height=74, bg=theme.BG, highlightthickness=0)
-        self.combo_canvas.pack(fill="x", pady=(12, 0))
+        self.combo_canvas = tk.Canvas(parent, height=self.density.combo_h, bg=theme.BG,
+                                      highlightthickness=0)
+        self.combo_canvas.pack(fill="x")
         c = self.combo_canvas
         self._combo_value = c.create_text(0, 26, text="0", fill=theme.TEXT_FAINT,
                                           font=self.f_combo, anchor="center")
@@ -242,22 +301,130 @@ class TypingApp(tk.Tk):
         c.bind("<Configure>", self._on_combo_configure)
 
     def _build_keyboard(self, parent: tk.Frame) -> None:
+        # Упаковывается позже, в _pack_keyboard: место в очереди pack должно
+        # быть перед подсказками, иначе после F6 клавиатура уезжала под них.
         self.kb_holder = tk.Frame(parent, bg=theme.BG)
-        self.kb_canvas = tk.Canvas(self.kb_holder, height=150, bg=theme.BG,
+        self.kb_canvas = tk.Canvas(self.kb_holder, height=self.density.kb_h, bg=theme.BG,
                                    highlightthickness=0)
         self.kb_canvas.pack(fill="x")
         self.finger_var = tk.StringVar()
         tk.Label(self.kb_holder, textvariable=self.finger_var, bg=theme.BG,
                  fg=theme.TEXT_DIM, font=self.f_hint).pack(pady=(2, 0))
         self.kb_canvas.bind("<Configure>", self._on_kb_configure)
-        if self.show_keyboard:
-            self.kb_holder.pack(fill="x", pady=(6, 0))
 
     def _build_footer(self, parent: tk.Frame) -> None:
         self.hint_var = tk.StringVar()
-        tk.Label(parent, textvariable=self.hint_var, bg=theme.BG, fg=theme.TEXT_FAINT,
-                 font=self.f_hint).pack(pady=(10, 0))
+        self.footer_label = tk.Label(parent, textvariable=self.hint_var, bg=theme.BG,
+                                     fg=theme.TEXT_FAINT, font=self.f_hint)
+        self.footer_label.pack()
         self._refresh_hint()
+
+    def _pack_keyboard(self) -> None:
+        """Показать клавиатуру строго между комбо и строкой подсказок."""
+        self.kb_holder.pack(fill="x", pady=(self.density.gap // 2, 0),
+                            before=self.footer_label)
+
+    # ------------------------------------------------------- плотность / размер
+
+    def _apply_density(self) -> None:
+        """Применить размеры текущей плотности ко всем секциям."""
+        d = self.density
+        gap = d.gap
+        self.f_target.configure(size=d.target)
+        self.f_stat.configure(size=d.stat)
+        self.f_combo.configure(size=d.combo)
+        self.f_combo_big.configure(size=d.combo_big)
+        self.f_result.configure(size=d.result)
+
+        self._header_bar.pack_configure(pady=(0, gap))
+        self._session_label.pack_configure(pady=(0, max(gap - 2, 2)))
+        self._stats_row.pack_configure(pady=(0, max(gap - 2, 2)))
+        for value, cap in self._tile_parts:
+            value.pack_configure(pady=(d.tile_pady, 0))
+            cap.pack_configure(pady=(0, d.tile_pady))
+        self.progress.pack_configure(pady=(0, gap + 2))
+        self.text.configure(pady=d.text_pady, spacing1=d.line_above, spacing3=d.line_below)
+        self.result_label.pack_configure(pady=(0, d.result_pady))
+        self.combo_canvas.configure(height=d.combo_h)
+        self.combo_canvas.pack_configure(pady=(gap, 0))
+        self.kb_canvas.configure(height=d.kb_h)
+        if self.kb_holder.winfo_manager():
+            self.kb_holder.pack_configure(pady=(gap // 2, 0))
+        self.footer_label.pack_configure(pady=(max(gap - 2, 2), 0))
+
+    @property
+    def compact(self) -> bool:
+        return self.density is COMPACT
+
+    def _set_density(self, density: Density) -> None:
+        if density is self.density:
+            return
+        self.density = density
+        self._apply_density()
+        self._combo_tier = None      # пересобрать геометрию комбо под новую высоту
+        self._fit_text_height()      # другой кегль — другое число строк
+
+    def _required_height(self, *, full_keyboard: bool = False) -> int:
+        """Сколько пикселей по высоте просят все секции вместе с отступами.
+
+        ``full_keyboard`` — посчитать так, будто клавиатура не ужата под
+        нехватку места, а имеет штатную для плотности высоту.
+        """
+        total = 0
+        for widget in self.body.pack_slaves():
+            pady = widget.pack_info().get("pady", 0)
+            # Tk отдаёт либо пару (сверху, снизу), либо одно число на обе стороны.
+            pad = sum(map(int, pady)) if isinstance(pady, (tuple, list)) else 2 * int(pady)
+            total += widget.winfo_reqheight() + pad
+        if full_keyboard and self.kb_holder.winfo_manager():
+            total += self.density.kb_h - self.kb_canvas.winfo_reqheight()
+        return total
+
+    def _check_fit(self) -> None:
+        """Выбрать плотность так, чтобы всё влезало в окно по высоте.
+
+        Обычная плотность предпочтительнее; компактная — когда без неё нижние
+        секции (клавиатура, подсказки) срезались бы. Обратно в обычную
+        переходим, только если она заведомо поместится, — без «дрожания».
+        """
+        avail = self.winfo_height() - 2 * BODY_PADY
+        if avail <= 1:
+            return
+        self.update_idletasks()
+        if (self.compact
+                and self._required_height(full_keyboard=True) + self._compact_saving <= avail):
+            self._set_density(NORMAL)
+            self.update_idletasks()
+        if not self.compact:
+            need = self._required_height()
+            if need <= avail:
+                return
+            self._set_density(COMPACT)
+            self.update_idletasks()
+            self._compact_saving = max(need - self._required_height(), 0)
+        # Компактно и всё равно тесно (длинная фраза в минимальном окне):
+        # отдаём недостающее за счёт клавиатуры — клавиши масштабируются
+        # по высоте холста и остаются целиком видны.
+        over = self._required_height(full_keyboard=True) - avail
+        kb_h = max(KB_MIN_H, self.density.kb_h - max(over, 0))
+        if int(self.kb_canvas.cget("height")) != kb_h:
+            self.kb_canvas.configure(height=kb_h)
+
+    def _on_window_configure(self, event: tk.Event) -> None:
+        # Привязка на корневом окне получает Configure и от всех потомков.
+        if event.widget is not self:
+            return
+        size = (event.width, event.height)
+        if size == self._win_size:
+            return
+        self._win_size = size
+        if self._fit_id is not None:
+            self.after_cancel(self._fit_id)
+        self._fit_id = self.after(120, self._fit_job)
+
+    def _fit_job(self) -> None:
+        self._fit_id = None
+        self._check_fit()
 
     def _build_help(self) -> None:
         self.help_frame = tk.Frame(self, bg=theme.PANEL_HI, highlightthickness=1,
@@ -366,7 +533,10 @@ class TypingApp(tk.Tk):
         self.text.tag_add("caret", "1.0", "1.1")
         self.text.configure(state="disabled")
         self._caret_pos = 0
+        self._caret_tag = "caret"
         self._fit_text_height()
+        # Фраза в 3+ строки может не влезть даже в окно обычного размера.
+        self._check_fit()
 
     def _fit_text_height(self) -> None:
         """Подогнать высоту поля под реальное число строк после переноса.
@@ -415,11 +585,15 @@ class TypingApp(tk.Tk):
         # здесь делал стоимость нажатия линейной от длины фразы.
         if self._caret_pos is not None:
             old = self._caret_pos
-            self.text.tag_remove("caret", f"1.{old}", f"1.{old + 1}")
+            self.text.tag_remove(self._caret_tag, f"1.{old}", f"1.{old + 1}")
             self._caret_pos = None
         if not effect.finished and session.pos < len(session.target):
-            self.text.tag_add("caret", f"1.{session.pos}", f"1.{session.pos + 1}")
-            self._caret_pos = session.pos
+            pos = session.pos
+            # Строгий режим держит курсор на ошибке — показываем её красной
+            # кареткой, иначе обычная каретка перекрывала красный фон.
+            self._caret_tag = "caret_bad" if session.marks[pos] is Mark.WRONG else "caret"
+            self.text.tag_add(self._caret_tag, f"1.{pos}", f"1.{pos + 1}")
+            self._caret_pos = pos
 
         if effect.started:
             self._start_tick()
@@ -477,7 +651,7 @@ class TypingApp(tk.Tk):
     def _cancel_all_jobs(self) -> None:
         """Погасить всё отложенное. Иначе кадр анимации может выстрелить уже
         после уничтожения окна и Tk выругается «invalid command name»."""
-        for attr in ("_tick_id", "_next_id", "_anim_id", "_resize_id"):
+        for attr in ("_tick_id", "_next_id", "_anim_id", "_resize_id", "_fit_id"):
             job = getattr(self, attr)
             if job is not None:
                 with suppress(tk.TclError):
@@ -569,8 +743,15 @@ class TypingApp(tk.Tk):
 
     def _on_combo_configure(self, event: tk.Event) -> None:
         self._combo_w = event.width
+        self._combo_h = event.height
         self._combo_tier = None          # заставить пересобрать геометрию
+        self._combo_bar_right = -1
         self._draw_combo()
+
+    def _combo_rows(self) -> tuple[int, int, int]:
+        """Вертикальные позиции: число, подпись, полоска (под высоту холста)."""
+        h = self._combo_h
+        return round(h * 0.35), round(h * 0.68), h - 10
 
     def _draw_combo(self, pulse: bool = False) -> None:
         width = self._combo_w
@@ -581,18 +762,20 @@ class TypingApp(tk.Tk):
         tier = theme.combo_tier(combo)
         c = self.combo_canvas
         mid = width // 2
+        value_y, caption_y, bar_y = self._combo_rows()
 
         # Тяжёлая часть — подписи и позиции — трогается только когда сменился
         # уровень комбо или размер окна, а не на каждое нажатие.
         if tier is not self._combo_tier:
             self._combo_tier = tier
-            c.coords(self._combo_value, mid, 26)
-            c.coords(self._combo_caption, mid, 50)
+            c.coords(self._combo_value, mid, value_y)
+            c.coords(self._combo_caption, mid, caption_y)
             caption = f"КОМБО · {tier.name.upper()}" if tier.name else "КОМБО"
             c.itemconfigure(self._combo_caption, text=caption, fill=tier.color)
             c.itemconfigure(self._combo_bar, fill=tier.color)
             bar_w = min(320, width - 80)
-            c.coords(self._combo_bar_bg, mid - bar_w // 2, 64, mid - bar_w // 2 + bar_w, 67)
+            c.coords(self._combo_bar_bg, mid - bar_w // 2, bar_y,
+                     mid - bar_w // 2 + bar_w, bar_y + 3)
 
         c.itemconfigure(self._combo_value, text=f"×{combo}" if combo else "—")
 
@@ -603,7 +786,7 @@ class TypingApp(tk.Tk):
         right = round(left + bar_w * filled)
         if right != self._combo_bar_right:      # меньше пикселя — не дёргаем Tk
             self._combo_bar_right = right
-            c.coords(self._combo_bar, left, 64, right, 67)
+            c.coords(self._combo_bar, left, bar_y, right, bar_y + 3)
 
         if pulse:
             self._pulse_combo(tier)
@@ -645,9 +828,12 @@ class TypingApp(tk.Tk):
     # ------------------------------------------------------- клавиатура-подсказка
 
     def _on_kb_configure(self, event: tk.Event) -> None:
-        if event.width == self._kb_width:
+        # Высота тоже важна: в компактной плотности холст ниже, и клавиши,
+        # посчитанные под старую высоту, вылезали бы за его край.
+        size = (event.width, event.height)
+        if size == self._kb_size:
             return
-        self._kb_width = event.width
+        self._kb_size = size
         if self._resize_id is not None:
             self.after_cancel(self._resize_id)
         self._resize_id = self.after(120, self._layout_keyboard)
@@ -662,21 +848,25 @@ class TypingApp(tk.Tk):
 
         layout = LAYOUTS[self.lang]
         rows = layout.rows
-        width = c.winfo_width()
-        if width <= 1:
+        width, height = c.winfo_width(), c.winfo_height()
+        if width <= 1 or height <= 1:
             return
         longest = max(len(r) for r in rows)
         gap = 4
         kw = min(46, (width - 40 - gap * longest) / longest)
-        kh = min(34, kw)
-        if kw < 12:
+        # Четыре ряда (три буквенных + пробел) обязаны уместиться по высоте:
+        # раньше высота клавиш считалась только от ширины, и в низком окне
+        # верхний ряд и пробел уходили за край холста.
+        kh = min(34, kw, (height - 3 * gap - 2) / 4)
+        if kw < 12 or kh < 10:
             return
-        total_h = kh * 3 + gap * 2 + kh + gap  # три ряда + пробел
+        total_h = kh * 4 + gap * 3  # три ряда + пробел
+        top = max((height - total_h) / 2, 0)
 
         for r, row in enumerate(rows):
             row_w = len(row) * (kw + gap) - gap
             x0 = (width - row_w) / 2
-            y0 = (c.winfo_height() - total_h) / 2 + r * (kh + gap)
+            y0 = top + r * (kh + gap)
             for i, ch in enumerate(row):
                 x = x0 + i * (kw + gap)
                 base_bg = theme.KEY_HOME_BG if ch in layout.anchors else theme.KEY_BG
@@ -688,7 +878,7 @@ class TypingApp(tk.Tk):
         # Пробел отдельным широким блоком.
         sw = kw * 7
         x = (width - sw) / 2
-        y = (c.winfo_height() - total_h) / 2 + 3 * (kh + gap)
+        y = top + 3 * (kh + gap)
         rect = c.create_rectangle(x, y, x + sw, y + kh, fill=theme.KEY_BG, width=0)
         label = c.create_text(x + sw / 2, y + kh / 2, text="ПРОБЕЛ",
                               fill=theme.KEY_FG, font=self.f_key)
@@ -756,11 +946,15 @@ class TypingApp(tk.Tk):
     def toggle_keyboard(self) -> None:
         self.show_keyboard = not self.show_keyboard
         if self.show_keyboard:
-            self.kb_holder.pack(fill="x", pady=(6, 0))
+            self._pack_keyboard()
             self._layout_keyboard()
         else:
             self.kb_holder.pack_forget()
         self._refresh_hint()
+        # Без клавиатуры может хватить обычной плотности: прежняя оценка
+        # экономии учитывала клавиатуру, поэтому сбрасываем её.
+        self._compact_saving = 0
+        self._check_fit()
 
     def toggle_help(self) -> None:
         if self.help_frame.winfo_ismapped():

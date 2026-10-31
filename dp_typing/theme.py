@@ -26,6 +26,8 @@ WRONG_FG = "#ff6b6b"
 WRONG_BG = "#3a1d22"
 CARET = "#4c8dff"
 CARET_DIM = "#24406e"
+#: Каретка поверх непринятой ошибки (строгий режим).
+CARET_BAD = "#ff6b6b"
 
 ACCENT = "#4c8dff"
 GOOD = "#3ddc97"
