@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dp-typing-master"
-version = "2.1.0"
+version = "2.2.0"
 description = "Тренажёр слепой печати для русской и английской раскладки"
 readme = "README.md"
 requires-python = ">=3.9"

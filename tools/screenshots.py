@@ -87,11 +87,27 @@ def shot(win, out: Path, name: str) -> None:
     print(f"{path}  {w}x{h}")
 
 
+def course_progress(win, done: int, learning: int) -> None:
+    """Состояние курса «как после нескольких дней занятий»: ``done`` букв
+    освоены, ``learning`` — в работе. Только для иллюстрации — во временном
+    профиле, который скрипт создаёт сам."""
+    from dp_typing.course import MIN_SAMPLES, letter_order, target_cpm
+
+    target = target_cpm(win.course_target_wpm)
+    win.course[win.lang] = done + learning
+    for i, ch in enumerate(letter_order(win.lang)[: done + learning]):
+        win.profile.key_samples[ch] = MIN_SAMPLES + 10
+        win.profile.key_acc[ch] = 0.99
+        win.profile.key_speed[ch] = target * (1.3 if i < done else 0.6 + 0.1 * (i - done))
+
+
 def main(out: Path) -> int:
     if shutil.which("import") is None:
         print("нужен ImageMagick (команда import)", file=sys.stderr)
         return 1
     out.mkdir(parents=True, exist_ok=True)
+
+    from dp_typing.words import Length
 
     win = app_module.TypingApp()
     win.geometry("1040x720+0+0")
@@ -110,11 +126,13 @@ def main(out: Path) -> int:
         win.new_test()
         finish(win, frozenset(errors))
 
+    course_progress(win, done=7, learning=3)
     win.mode = Mode.LESSON
     win._refresh_chips()
     win.new_test()
-    finish(win)                                  # 100% → ступень повышается
-    shot(win, out, "04_lesson")
+    settle(win, 300)
+    type_chars(win, 16, frozenset({7}))
+    shot(win, out, "04_course")
 
     win.mode = Mode.ADAPTIVE
     win._refresh_chips()
@@ -143,6 +161,33 @@ def main(out: Path) -> int:
         press(win, ch)
     shot(win, out, "09_layout_notice")
 
+    win.rng.seed(8)                              # заглавные, знаки, цифры
+    win.options = win.options.__class__(caps=True, punct=True, digits=True)
+    win._refresh_chips()
+    win.new_test()
+    settle(win, 400)
+    session = win.session
+    while (not session.finished and session.pos < 40
+           and session.target[session.pos] not in ",.!?:;\"()"):
+        type_chars(win, 1)
+    shot(win, out, "10_text_options")
+
+    win.options = win.options.__class__()
+    win.set_length(Length("time", 60))
+    settle(win, 400)
+    type_chars(win, sum(len(line) for line in win._lines[:2]) + 6, frozenset({25}))
+    shot(win, out, "11_timed")
+
+    win.set_length(Length("phrase"))
+    win.mode = Mode.CUSTOM
+    win._refresh_chips()
+    win.new_test()
+    settle(win, 400)
+    type_chars(win, 22)
+    shot(win, out, "12_custom")
+
+    win.mode = Mode.COMMON
+    win._refresh_chips()
     win.geometry("760x560+0+0")
     settle(win, 500)
     win.new_test()
