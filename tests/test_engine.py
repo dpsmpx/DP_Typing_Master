@@ -467,3 +467,16 @@ def test_untimed_session_never_times_out():
     clock.advance(1000)
     assert not s.check_timeout()
     assert s.remaining() is None
+
+
+def test_finished_timed_test_has_exactly_nothing_left():
+    """На больших значениях часов (долгий аптайм) вычитание с плавающей точкой
+    давало остаток 2e-10, и отсчёт после финиша показывал «1» вместо «0»."""
+    start = 7579786.075000084              # найдено перебором, воспроизводило дефект
+    clock = FakeClock(start)
+    s = TypingSession("а" * 50, clock=clock, time_limit=0.3)
+    s.type_char("а")
+    clock.now = start + 0.31
+    assert s.check_timeout()
+    assert s.remaining() == 0.0
+    assert s.elapsed() == 0.3

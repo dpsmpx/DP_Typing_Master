@@ -281,6 +281,10 @@ class TypingSession:
         """Время набора без простоев (см. IDLE_GAP)."""
         if self.started_at is None:
             return 0.0
+        if self.timed_out:
+            # Ровно лимит. Вычитание из момента финиша давало 0,2999999998
+            # вместо 0,3 на больших значениях часов, и отсчёт показывал «1».
+            return self.time_limit
         end = self.finished_at
         idle = 0.0
         if end is None:
@@ -308,6 +312,8 @@ class TypingSession:
         """Сколько секунд осталось в тесте на время (None — тест не на время)."""
         if self.time_limit is None:
             return None
+        if self.timed_out:
+            return 0.0
         return max(self.time_limit - self.elapsed(now), 0.0)
 
     def is_idle(self, now: float | None = None) -> bool:
