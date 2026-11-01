@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff flake8
+      - run: ruff check .
+      - run: flake8 .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Виртуальный дисплей и Tk
+        run: sudo apt-get update && sudo apt-get install -y xvfb libtk8.6 fonts-dejavu-core
+      - run: pip install pytest
+      - name: Тесты, включая интерфейс на настоящем Tk
+        env:
+          DP_REQUIRE_GUI: "1"
+        run: xvfb-run -a python -m pytest -q

@@ -4,6 +4,7 @@ import pytest
 
 from dp_typing.engine import (
     CHARS_PER_WORD,
+    IDLE_GAP,
     MAX_CPM,
     Mark,
     Profile,
@@ -230,3 +231,252 @@ def test_weak_chars_needs_enough_samples():
     p = Profile()
     p.absorb(play("az", "aX"))
     assert dict(p.weak_chars()).get("z") is None
+
+
+# ------------------------------------------------- простой не считается набором
+
+def test_long_pause_is_not_typing_time():
+    """Минута раздумий посреди фразы стоит не дороже IDLE_GAP."""
+    clock = FakeClock()
+    s = TypingSession("abc", clock=clock)
+    s.type_char("a")
+    clock.advance(0.2)
+    s.type_char("b")
+    clock.advance(60)
+    s.type_char("c")
+    assert s.finished
+    assert s.elapsed() == pytest.approx(0.2 + IDLE_GAP)
+
+
+def test_short_pauses_count_in_full():
+    clock = FakeClock()
+    s = TypingSession("abc", clock=clock)
+    for ch in "abc":
+        s.type_char(ch)
+        clock.advance(IDLE_GAP - 0.1)
+    assert s.elapsed() == pytest.approx(2 * (IDLE_GAP - 0.1))
+
+
+def test_live_metrics_freeze_while_idle():
+    """Пока пользователь отошёл, скорость не падает и время стоит."""
+    clock = FakeClock()
+    s = TypingSession("abcd", clock=clock)
+    s.type_char("a")
+    clock.advance(0.5)
+    s.type_char("b")
+    assert not s.is_idle()
+    clock.advance(IDLE_GAP + 1)
+    assert s.is_idle()
+    frozen = s.elapsed()
+    clock.advance(3600)
+    assert s.elapsed() == pytest.approx(frozen) == pytest.approx(0.5 + IDLE_GAP)
+    s.type_char("c")                       # вернулся — время пошло дальше
+    assert not s.is_idle()
+
+
+def test_backspace_counts_as_activity():
+    clock = FakeClock()
+    s = TypingSession("abc", clock=clock)
+    s.type_char("x")
+    clock.advance(IDLE_GAP - 1)
+    s.backspace()
+    clock.advance(IDLE_GAP - 1)
+    s.type_char("a")
+    assert s.paused == 0
+    assert s.elapsed() == pytest.approx(2 * (IDLE_GAP - 1))
+
+
+def test_abandoned_test_does_not_bring_idle_hours():
+    """Фраза брошена на час: в профиль не должен уйти час «печати»."""
+    clock = FakeClock()
+    s = TypingSession("abcdef", clock=clock)
+    s.type_char("a")
+    clock.advance(0.3)
+    s.type_char("b")
+    clock.advance(3600)
+    assert s.elapsed() == pytest.approx(0.3 + IDLE_GAP)
+
+
+# ------------------------------------------------------------ ё через е
+
+def test_e_is_accepted_for_yo():
+    s = TypingSession("ещё всё", equivalents={"ё": "е"})
+    for ch in "еще все":
+        s.type_char(ch)
+    assert s.finished
+    assert s.errors == 0
+    assert s.combo == len("ещё всё")
+    assert s.char_total["ё"] == 2           # статистика — по букве из текста
+
+
+def test_yo_itself_is_still_correct():
+    s = TypingSession("ёж", equivalents={"ё": "е"})
+    s.type_char("ё")
+    s.type_char("ж")
+    assert s.errors == 0
+
+
+def test_equivalence_is_one_way():
+    """«е» вместо «ё» — да, «ё» вместо «е» — нет."""
+    s = TypingSession("ель", equivalents={"ё": "е"})
+    s.type_char("ё")
+    assert s.errors == 1
+
+
+# --------------------------------------------- брошенная фраза в статистике
+
+def test_absorb_keys_keeps_errors_but_not_the_test():
+    s = TypingSession("кот")
+    s.type_char("к")
+    s.type_char("и")                        # ошибка на «о»
+    p = Profile()
+    p.absorb_keys(s)
+    assert p.tests == 0
+    assert p.total_keystrokes == 0
+    assert p.total_time == 0
+    assert p.char_errors["о"] == 1
+    assert p.char_total["к"] == 1
+
+
+# ------------------------------------------------- рекорды по режимам (A-14)
+
+def finished_session(text: str, seconds_per_char: float) -> TypingSession:
+    clock = FakeClock()
+    s = TypingSession(text, clock=clock)
+    for ch in text:
+        s.type_char(ch)
+        clock.advance(seconds_per_char)
+    return s
+
+
+def test_records_are_kept_per_key():
+    p = Profile()
+    p.absorb(finished_session("рад пора пол", 0.1), "ru/lesson/phrase")
+    p.absorb(finished_session("обычный текст", 0.3), "ru/common/phrase")
+    assert p.record("ru/lesson/phrase") > p.record("ru/common/phrase") > 0
+    assert p.record("en/common/phrase") == 0
+
+
+def test_beating_a_record_is_reported():
+    p = Profile()
+    assert p.absorb(finished_session("кот", 0.3), "k") is False   # первый — не «рекорд»
+    assert p.absorb(finished_session("кот", 0.5), "k") is False   # медленнее
+    slow = p.record("k")
+    assert p.absorb(finished_session("кот", 0.1), "k") is True
+    assert p.record("k") > slow
+
+
+def test_unfinished_session_sets_no_record():
+    s = TypingSession("кот")
+    s.type_char("к")
+    p = Profile()
+    p.absorb(s, "k")
+    assert p.records == {}
+
+
+# ------------------------------------------------- скорость каждой клавиши
+
+def test_session_times_each_correct_keystroke():
+    clock = FakeClock()
+    s = TypingSession("абв", clock=clock)
+    s.type_char("а")            # первое нажатие — интервала ещё нет
+    clock.advance(0.2)
+    s.type_char("б")
+    clock.advance(0.4)
+    s.type_char("в")
+    assert s.char_time_n == {"б": 1, "в": 1}
+    assert s.char_time["б"] == pytest.approx(0.2)
+    assert s.char_time["в"] == pytest.approx(0.4)
+
+
+def test_pauses_and_errors_do_not_time_keys():
+    clock = FakeClock()
+    s = TypingSession("абв", clock=clock)
+    s.type_char("а")
+    clock.advance(IDLE_GAP + 3)
+    s.type_char("б")            # после простоя — не скорость пальцев
+    clock.advance(0.2)
+    s.type_char("х")            # ошибка — не засчитываем
+    assert s.char_time_n == {}
+
+
+def test_profile_tracks_key_speed_and_accuracy():
+    p = Profile()
+    p.absorb(finished_session("абабабаб", 0.25), "k")      # 240 знаков/мин
+    assert p.key_speed["б"] == pytest.approx(240, rel=0.01)
+    assert p.key_acc["б"] == 1.0
+    assert p.key_samples["б"] == 4
+
+    s = TypingSession("бббб")
+    for ch in "бхбх":
+        s.type_char(ch)
+    p.absorb_keys(s)
+    assert 0.5 < p.key_acc["б"] < 1.0        # ошибки тянут среднее вниз
+    assert p.key_samples["б"] == 8
+
+
+def test_recent_keystrokes_outweigh_old_ones():
+    p = Profile()
+    p.absorb(finished_session("б" * 30, 0.6), "k")          # медленно
+    p.absorb(finished_session("б" * 30, 0.2), "k")          # быстро
+    assert p.key_speed["б"] > (100 + 300) / 2               # ближе к свежему
+
+
+# ------------------------------------------------------------ тест на время
+
+def test_timed_session_stops_exactly_at_the_limit():
+    clock = FakeClock()
+    s = TypingSession("а" * 100, clock=clock, time_limit=2.0)
+    for moment in (0.0, 0.5, 1.0, 1.5, 1.9):    # пять нажатий внутри лимита
+        clock.now = moment
+        assert not s.type_char("а").finished
+    clock.now = 2.1                              # лимит уже набран
+    effect = s.type_char("а")
+    assert effect.finished and s.finished and s.timed_out
+    assert s.elapsed() == pytest.approx(2.0)    # ровно лимит, не момент проверки
+    assert s.keystrokes == 5                    # опоздавшее нажатие не в счёт
+
+
+def test_timeout_is_found_by_polling():
+    clock = FakeClock()
+    s = TypingSession("а" * 100, clock=clock, time_limit=1.0)
+    s.type_char("а")
+    clock.advance(0.7)
+    assert not s.check_timeout()
+    assert s.remaining() == pytest.approx(0.3)
+    clock.advance(0.31)
+    assert s.check_timeout()
+    assert s.remaining() == 0
+    assert not s.check_timeout()                # повторно — уже закончен
+
+
+def test_pause_does_not_eat_the_time_limit():
+    """Отошёл посреди теста на минуту — время теста стоит."""
+    clock = FakeClock()
+    s = TypingSession("а" * 100, clock=clock, time_limit=10.0)
+    s.type_char("а")
+    clock.advance(600)
+    assert not s.check_timeout()
+    assert s.remaining() == pytest.approx(10.0 - IDLE_GAP)
+
+
+def test_untimed_session_never_times_out():
+    clock = FakeClock()
+    s = TypingSession("аб", clock=clock)
+    s.type_char("а")
+    clock.advance(1000)
+    assert not s.check_timeout()
+    assert s.remaining() is None
+
+
+def test_finished_timed_test_has_exactly_nothing_left():
+    """На больших значениях часов (долгий аптайм) вычитание с плавающей точкой
+    давало остаток 2e-10, и отсчёт после финиша показывал «1» вместо «0»."""
+    start = 7579786.075000084              # найдено перебором, воспроизводило дефект
+    clock = FakeClock(start)
+    s = TypingSession("а" * 50, clock=clock, time_limit=0.3)
+    s.type_char("а")
+    clock.now = start + 0.31
+    assert s.check_timeout()
+    assert s.remaining() == 0.0
+    assert s.elapsed() == 0.3

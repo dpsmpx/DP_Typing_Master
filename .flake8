@@ -1,0 +1,6 @@
+[flake8]
+# Те же правила, что у ruff (см. pyproject.toml): строка до 100 символов,
+# E203 конфликтует с форматированием срезов.
+max-line-length = 100
+extend-ignore = E203
+exclude = .git,__pycache__,build,dist,.venv,venv

@@ -26,6 +26,8 @@ WRONG_FG = "#ff6b6b"
 WRONG_BG = "#3a1d22"
 CARET = "#4c8dff"
 CARET_DIM = "#24406e"
+#: Каретка поверх непринятой ошибки (строгий режим).
+CARET_BAD = "#ff6b6b"
 
 ACCENT = "#4c8dff"
 GOOD = "#3ddc97"
@@ -37,6 +39,9 @@ KEY_FG = "#7d8698"
 KEY_NEXT_BG = "#4c8dff"
 KEY_NEXT_FG = "#ffffff"
 KEY_HOME_BG = "#232b38"
+#: Курс: ещё закрытые клавиши — приглушены, фокусная — в рамке.
+KEY_LOCKED_BG = "#13171e"
+KEY_LOCKED_FG = "#353c4a"
 
 # ------------------------------------------------------------------ комбо
 
@@ -80,6 +85,12 @@ def next_threshold(combo: int) -> int | None:
 
 
 def accuracy_color(accuracy: float) -> str:
+    """Цвет точности — по тому значению, которое видит пользователь.
+
+    Округляем так же, как при выводе (``f"{x:.0f}"``), иначе 96,7% выглядело
+    как «97%», но красилось жёлтым, а 97,1% — зелёным.
+    """
+    accuracy = round(accuracy)
     if accuracy >= 97.0:
         return GOOD
     if accuracy >= 92.0:

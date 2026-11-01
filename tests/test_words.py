@@ -6,11 +6,13 @@ import pytest
 
 from dp_typing.words import (
     MAX_WORD_LEN,
+    MIN_PSEUDO_LEN,
     MIN_WORD_LEN,
     Mode,
+    TextOptions,
     TextSource,
     adaptive_weights,
-    lesson_stages,
+    decorate,
     load_words,
     pseudo_word,
     words_for_zone,
@@ -51,16 +53,24 @@ def test_unknown_language_rejected():
 def test_pseudo_words_are_well_formed(lang, alphabet, rng):
     for _ in range(500):
         w = pseudo_word(lang, rng)
-        assert MIN_WORD_LEN <= len(w) <= MAX_WORD_LEN
+        assert MIN_PSEUDO_LEN <= len(w) <= MAX_WORD_LEN, f"обрывок {w!r}"
         assert set(w) <= alphabet, f"посторонний символ в {w!r}"
 
 
-def test_pseudo_words_are_mostly_novel(rng):
-    """Генератор должен придумывать слова, а не пересказывать словарь."""
-    real = set(load_words("ru"))
-    made = [pseudo_word("ru", rng) for _ in range(400)]
-    novel = sum(1 for w in made if w not in real)
-    assert novel / len(made) > 0.5
+@pytest.mark.parametrize("lang", ["ru", "en"])
+def test_pseudo_words_are_never_real(lang, rng):
+    """A-17: режим обещает несуществующие слова — ни одного настоящего."""
+    real = set(load_words(lang))
+    made = [pseudo_word(lang, rng) for _ in range(2000)]
+    assert not [w for w in made if w in real]
+
+
+def test_pseudo_words_can_be_limited_to_letters(rng):
+    allowed = frozenset("оеаинтср")
+    words = [pseudo_word("ru", rng, allowed=allowed, novel=False) for _ in range(200)]
+    produced = [w for w in words if w]
+    assert len(produced) > 150
+    assert all(set(w) <= allowed for w in produced)
 
 
 def test_pseudo_generation_is_reproducible():
@@ -69,36 +79,20 @@ def test_pseudo_generation_is_reproducible():
     assert a == b
 
 
-# ------------------------------------------------------------------- уроки
+# ------------------------------------------------------------ слова по буквам
 
-@pytest.mark.parametrize("lang", ["ru", "en"])
-def test_lesson_stages_widen_monotonically(lang):
-    stages = lesson_stages(lang)
-    assert len(stages) >= 4
-    sizes = [len(set(keys)) for _, keys in stages]
-    assert sizes == sorted(sizes), "ступени должны расширяться, а не сужаться"
-
-
-@pytest.mark.parametrize("lang", ["ru", "en"])
-def test_lesson_phrase_stays_inside_its_zone(lang, rng):
-    """Урок не имеет права подсунуть клавишу, которую ещё не проходили."""
-    for stage, (_title, keys) in enumerate(lesson_stages(lang)):
-        source = TextSource(lang, Mode.LESSON, stage=stage, rng=rng)
-        used = set(source.phrase(40).replace(" ", ""))
-        assert used <= set(keys), f"ступень {stage}: лишние клавиши {used - set(keys)}"
+def test_yo_words_reach_lessons_through_e():
+    """Слово с «ё» годится для зоны с «е»: печатать его можно через «е»."""
+    zone = "".join(sorted(set("ещёвсё") - {"ё"}))
+    pool = words_for_zone("ru", zone)
+    assert "ещё" in pool and "всё" in pool
+    assert words_for_zone("ru", "щв") == ()       # без «е» — нельзя
 
 
 def test_zone_words_are_filtered_correctly():
     pool = words_for_zone("ru", "фывапролдж")
     assert pool, "домашний ряд обязан давать хоть какие-то слова"
     assert all(set(w) <= set("фывапролдж") for w in pool)
-
-
-def test_narrow_zone_falls_back_to_synthetic(rng):
-    """Для «fghj» реальных английских слов нет — нужен запасной генератор."""
-    assert words_for_zone("en", "fghj") == ()
-    phrase = TextSource("en", Mode.LESSON, stage=0, rng=rng).phrase(6)
-    assert phrase and set(phrase.replace(" ", "")) <= set("fghj")
 
 
 # ---------------------------------------------------------------- адаптив
@@ -162,3 +156,101 @@ def test_generated_phrases_stay_clean(lang, rng):
     """Псевдослова строятся на словаре, но проверим и их выдачу."""
     words = set(TextSource(lang, Mode.COMMON, rng=rng).phrase(2000).split())
     assert not (PROFANITY[lang] & words)
+
+
+# ------------------------------------------- заглавные, знаки, цифры (A-27)
+
+ALL_ON = TextOptions(caps=True, punct=True, digits=True)
+
+
+def test_plain_options_leave_words_alone(rng):
+    words = ["кот", "пёс", "дом"]
+    assert decorate(words, rng, TextOptions()) == words
+
+
+@pytest.mark.parametrize("options", [
+    TextOptions(caps=True), TextOptions(punct=True), TextOptions(digits=True), ALL_ON,
+])
+def test_decoration_keeps_the_word_count(rng, options):
+    """Тест «на 25 слов» обязан остаться тестом на 25 слов."""
+    words = list(load_words("ru")[:300])
+    rng.shuffle(words)
+    out = decorate(words[:50], rng, options)
+    joined = " ".join(out)
+    assert len(joined.split()) == 50 + joined.count(" -")  # тире — отдельный «знак»
+
+
+def test_caps_start_sentences(rng):
+    out = decorate(["один", "два", "три"], rng, TextOptions(caps=True))
+    assert out[0] == "Один"
+
+
+def test_punctuation_ends_sentences_and_capitalises_after(rng):
+    text = " ".join(decorate(["слово"] * 200, rng, TextOptions(caps=True, punct=True)))
+    assert text[-1] in ".!?"
+    assert "," in text and "." in text
+    sentences = [s.strip() for s in text.replace("!", ".").replace("?", ".").split(".") if s]
+    starts = [s.lstrip('("') for s in sentences]
+    assert all(s[0].isupper() for s in starts if s and s[0].isalpha())
+
+
+def test_digits_appear_and_are_typeable(rng):
+    text = " ".join(decorate(["слово"] * 200, rng, TextOptions(digits=True)))
+    assert any(ch.isdigit() for ch in text)
+
+
+@pytest.mark.parametrize("lang", ["ru", "en"])
+def test_decorated_text_is_typeable_on_the_layout(lang, rng):
+    """Всё, что генерируется, должно набираться на раскладке без её смены."""
+    from dp_typing.layout import stroke_for
+
+    source = TextSource(lang, Mode.COMMON, rng=rng, options=ALL_ON)
+    text = " ".join(source.phrase(40) for _ in range(20))
+    missing = {ch for ch in text if stroke_for(lang, ch) is None}
+    assert not missing, f"не набрать на {lang}: {missing}"
+
+
+def test_lessons_ignore_text_options(rng):
+    source = TextSource("ru", Mode.LESSON, rng=rng, options=ALL_ON)
+    phrase = source.phrase(30)
+    assert phrase == phrase.lower()
+    assert not any(ch in phrase for ch in ".,!?0123456789")
+
+
+def test_options_key_is_stable():
+    assert TextOptions().key == ""
+    assert ALL_ON.key == "A.1"
+    assert TextOptions(punct=True).key == "."
+
+
+# ------------------------------------------------------------ длина теста
+
+def test_lengths_round_trip_through_their_keys():
+    from dp_typing.words import LENGTHS, Length
+
+    keys = [length.key for length in LENGTHS]
+    assert len(set(keys)) == len(keys)
+    for length in LENGTHS:
+        assert Length.parse(length.key) == length
+    assert Length.parse("ерунда") == LENGTHS[0]
+    assert Length.parse(None).kind == "phrase"
+
+
+def test_timed_tests_get_enough_text():
+    """Даже на потолке скорости (1500 знаков/мин) текст не кончится раньше."""
+    from dp_typing.engine import MAX_CPM
+    from dp_typing.words import LENGTHS
+
+    rng = random.Random(3)
+    for length in (x for x in LENGTHS if x.timed):
+        source = TextSource("ru", Mode.COMMON, rng=rng)
+        text = source.phrase(length.word_count())
+        assert len(text) >= MAX_CPM / 60 * length.amount
+
+
+def test_length_titles():
+    from dp_typing.words import Length
+
+    assert Length("phrase").title == "ФРАЗА"
+    assert Length("words", 25).title == "25 СЛОВ"
+    assert Length("time", 60).title == "60 С"
