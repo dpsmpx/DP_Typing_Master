@@ -10,6 +10,16 @@
 
 ## Запуск
 
+### Windows
+
+Скачайте готовый `.exe` из [Releases](https://github.com/dpsmpx/DP_Typing_Master/releases):
+
+**[DP_Typing_Master.exe](https://github.com/dpsmpx/DP_Typing_Master/releases/download/v2.2.0/DP_Typing_Master.exe)** (≈11 МБ)
+
+Просто запустите — Python ставить не нужно.
+
+### Из исходников (Linux / macOS / Windows)
+
 ```bash
 python DP_Typing_Master.py
 ```
@@ -157,6 +167,9 @@ ruff check . && flake8 .
 ```
 
 CI (GitHub Actions) гоняет линтеры и все тесты под Xvfb на Python 3.9–3.13.
+
+Сборка Windows `.exe` — через workflow **Release** (PyInstaller на `windows-latest`).
+Запускается вручную или по тегу `v*`.
 
 Скриншоты для документации пересобираются одной командой (нужен ImageMagick):
 
