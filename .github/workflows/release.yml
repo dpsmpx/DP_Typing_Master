@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия релиза (например 2.2.0). Если пусто — берётся из pyproject.toml"
+        required: false
+        default: ""
+      prerelease:
+        description: "Pre-release?"
+        type: boolean
+        default: false
+
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Determine version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VER="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/v}"
+          else
+            VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          fi
+          echo "version=$VER" >> $GITHUB_OUTPUT
+          echo "tag=v$VER" >> $GITHUB_OUTPUT
+          echo "Version: $VER"
+
+      - name: Build Windows exe
+        shell: bash
+        run: |
+          pyinstaller \
+            --onefile \
+            --windowed \
+            --name "DP_Typing_Master" \
+            --collect-data dp_typing \
+            --noconfirm \
+            --clean \
+            DP_Typing_Master.py
+
+      - name: Check artifact
+        shell: bash
+        run: |
+          ls -la dist/
+          file dist/DP_Typing_Master.exe || true
+          # roughly check size > 5 MB (tkinter + python)
+          SIZE=$(stat -c%s dist/DP_Typing_Master.exe 2>/dev/null || stat -f%z dist/DP_Typing_Master.exe)
+          echo "Size: $SIZE bytes"
+          if [ "$SIZE" -lt 5000000 ]; then
+            echo "Exe looks too small, something went wrong"
+            exit 1
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: DP Typing Master ${{ steps.ver.outputs.version }}
+          body: |
+            ## Windows
+
+            Скачайте `DP_Typing_Master.exe` — однофайловый исполняемый файл.
+            Никаких зависимостей и установки Python не требуется.
+
+            Запуск: просто двойной клик.
+
+            ---
+            Версия **${{ steps.ver.outputs.version }}**
+            Исходники: https://github.com/dpsmpx/DP_Typing_Master
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          files: |
+            dist/DP_Typing_Master.exe
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
