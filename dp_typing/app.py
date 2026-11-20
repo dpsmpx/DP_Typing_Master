@@ -169,7 +169,9 @@ class TypingApp(tk.Tk):
         restore_profile(self.profile, saved)
         saved_lang = saved.get("lang")
         # A manually edited or damaged JSON profile can contain unhashable values.
-        self.lang: str = saved_lang if isinstance(saved_lang, str) and saved_lang in LAYOUTS else "ru"
+        self.lang: str = (
+            saved_lang if isinstance(saved_lang, str) and saved_lang in LAYOUTS else "ru"
+        )
         try:
             self.mode = Mode(saved.get("mode", Mode.COMMON.value))
         except ValueError:
