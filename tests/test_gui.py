@@ -1244,3 +1244,11 @@ def test_dvorak_keyboard_selection_preserves_english_training(app):
     assert app.session.target
     app.set_keyboard_variant("colemak")
     assert app._keyboard_code() == "colemak"
+
+
+def test_ukrainian_and_belarusian_language_cycle(app):
+    initial = app.lang
+    for _ in range(4):
+        app.toggle_language()
+        assert app.session is not None and app.session.target
+    assert app.lang == initial
