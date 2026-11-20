@@ -159,5 +159,5 @@ class KeyboardMixin:
         alternative = EQUIVALENTS[self.lang].get(ch) if ch else None
         if hint and alternative:
             hint += f" · можно и «{alternative}»"
-        self.finger_var.set(hint)
+        self.finger_var.set(self._tr(hint))
 

@@ -28,7 +28,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
-from . import __version__, awards, progress, progress_view, sound, theme
+from . import __version__, awards, i18n, progress, progress_view, sound, theme
 from .course import (
     DEFAULT_TARGET_WPM,
     MIN_SAMPLES,
@@ -202,6 +202,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         self.sound_enabled = bool(saved.get("sound_enabled", False))
         self.ghost_enabled = bool(saved.get("ghost_enabled", False))
         self.light_theme = bool(saved.get("light_theme", False))
+        self.ui_language = "en" if saved.get("ui_language") == "en" else "ru"
         stored_awards = saved.get("awards", [])
         self.achievements = (
             set(stored_awards) & awards.MILESTONES.keys()
@@ -278,6 +279,8 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         self._build_fonts()
         self._build_ui()
         self._build_menu()
+        self._localize_widgets(self)
+        self._localize_menu(self._menu)
         self._bind_keys()
 
         self.protocol("WM_DELETE_WINDOW", self._quit)
@@ -577,6 +580,8 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
                              command=self.toggle_ghost)
         settings.add_command(label="Светлая / тёмная тема (после перезапуска)",
                              command=self.toggle_theme)
+        settings.add_command(label="English / Русский UI (после перезапуска)",
+                             command=self.toggle_ui_language)
         variants = tk.Menu(menu, tearoff=0)
         self._variant_choice = tk.StringVar(value=self.keyboard_variant)
         for value, name in (("en", "QWERTY"), ("dvorak", "Dvorak"),
@@ -1113,7 +1118,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         self.result_label.configure(
             fg=theme.accuracy_color(metrics.accuracy) if metrics.errors else theme.GOOD
         )
-        self.result_var.set("  ·  ".join(parts))
+        self.result_var.set(self._tr("  ·  ".join(parts)))
 
         if self.mode is Mode.LESSON:
             opened = self._course_progress()
@@ -1260,6 +1265,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
     def _show_notice(self, text: str, kind: str = "info", timeout_ms: int = INFO_NOTICE_MS,
                      *, source: str | None = None) -> None:
         """Показать плашку поверх низа панели с фразой; сама скроется."""
+        text = self._tr(text)
         style = (text, kind)
         if style != self._notice_style:
             bg, fg = NOTICE_COLORS[kind]
@@ -1432,6 +1438,43 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         self._refresh_hint()
         self.restart_test()
 
+    def _tr(self, value: str) -> str:
+        return i18n.translate(value, self.ui_language)
+
+    def toggle_ui_language(self) -> None:
+        self.ui_language = "en" if self.ui_language == "ru" else "ru"
+        self._persist()
+        self._show_notice("Interface language saved — restart the application"
+                          if self.ui_language == "en"
+                          else "Язык интерфейса сохранён — перезапустите приложение")
+
+    def _localize_widgets(self, parent) -> None:
+        """Translate built-in visible text; never touch the exercise text."""
+        if self.ui_language != "en":
+            return
+        if isinstance(parent, (tk.Label, tk.Button, tk.Checkbutton)):
+            original = parent.cget("text")
+            if original:
+                parent.configure(text=self._tr(original))
+        for child in parent.winfo_children():
+            self._localize_widgets(child)
+
+    def _localize_menu(self, menu: tk.Menu) -> None:
+        if self.ui_language != "en":
+            return
+        count = menu.index("end")
+        if count is None:
+            return
+        for i in range(count + 1):
+            kind = menu.type(i)
+            if kind in ("cascade", "command", "checkbutton", "radiobutton"):
+                label = menu.entrycget(i, "label")
+                menu.entryconfigure(i, label=self._tr(label))
+                if kind == "cascade":
+                    child = menu.entrycget(i, "menu")
+                    if child:
+                        self._localize_menu(menu.nametowidget(child))
+
     def toggle_theme(self) -> None:
         self.light_theme = not self.light_theme
         self._persist()
@@ -1497,11 +1540,13 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
                  "be": "БЕЛАРУСКАЯ"}[self.lang]
         if self.lang == "en":
             title += " / " + LAYOUTS[self._keyboard_code()].title.upper()
-        self.lang_var.set(title)
-        self.mode_var.set(self.mode.title.upper())
-        self.stage_var.set(f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
-                           f" · ★ {awards.stars(self.course[self.lang])}"
-                           f" · ФОКУС «{self._course_focus().upper()}»  ▾")
+        self.lang_var.set(self._tr(title))
+        self.mode_var.set(self._tr(self.mode.title.upper()))
+        self.stage_var.set(self._tr(
+            f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
+            f" · ★ {awards.stars(self.course[self.lang])}"
+            f" · ФОКУС «{self._course_focus().upper()}»  ▾"
+        ))
         if len(self._chips) == 3:
             # Ступень имеет смысл только в режиме уроков: вне их чип скрыт, а
             # не приглушён — клик по приглушённому молча менял режим.
@@ -1513,7 +1558,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
                 chip.pack_forget()
         self.source.lang, self.source.mode = self.lang, self.mode
         self.source.options = self.options
-        self.length_var.set(f"{self.length.title} ▾")
+        self.length_var.set(self._tr(f"{self.length.title} ▾"))
         if hasattr(self, "_extra_caption"):
             self._refresh_extra_tile()
         self._refresh_option_chips()
@@ -1633,13 +1678,14 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
             bits.append("строгий режим включён")
         if not self.show_keyboard:
             bits.append("клавиатура скрыта (F6)")
-        self.hint_var.set("     ".join(bits))
+        self.hint_var.set(self._tr("     ".join(bits)))
 
     # ------------------------------------------------------------------ прочее
 
     def open_progress(self) -> None:
         """Open the on-demand progress screen without background timers."""
-        progress_view.show(self)
+        window = progress_view.show(self)
+        self._localize_widgets(window)
 
     def _persist(self) -> None:
         save_profile(self.profile, {
@@ -1654,6 +1700,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
             "sound_enabled": self.sound_enabled,
             "ghost_enabled": self.ghost_enabled,
             "light_theme": self.light_theme,
+            "ui_language": self.ui_language,
             "awards": sorted(self.achievements),
             "length": self.length.key,
             "caps": self.options.caps,
