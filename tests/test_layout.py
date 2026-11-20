@@ -183,3 +183,16 @@ def test_alternative_english_layouts_are_complete(variant):
     assert finger_for(variant, right) == RIGHT_INDEX
     for plain, shifted in layout.full:
         assert len(plain) == len(shifted)
+
+
+@pytest.mark.parametrize("lang", ["uk", "be"])
+def test_new_cyrillic_layouts_are_typeable(lang):
+    layout = LAYOUTS[lang]
+    assert len(layout.letters) == len(set(layout.letters))
+    for ch in layout.letters:
+        assert stroke_for(lang, ch) is not None
+    assert finger_for(lang, layout.anchors[0]) == LEFT_INDEX
+    assert finger_for(lang, layout.anchors[1]) == RIGHT_INDEX
+    for plain, shifted in layout.full:
+        assert len(plain) == len(shifted)
+    assert input_problem(lang, "q", layout.home[0]) == WRONG_LAYOUT
