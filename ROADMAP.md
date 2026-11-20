@@ -1,5 +1,7 @@
 # ROADMAP
 
+**Рабочая ветка:** изменения этапов 2.3–3.0 в [PR #4](https://github.com/dpsmpx/DP_Typing_Master/pull/4), [статус и ограничения](docs/ROADMAP_IMPLEMENTATION.md). Чекбоксы ниже относятся к последнему выпущенному релизу 2.2.0 до слияния PR.
+
 План развития DP Typing Master. Составлен по итогам
 [аудита](docs/AUDIT.md) (идентификаторы `A-xx`) и
 [исследования аналогов](docs/RESEARCH.md).

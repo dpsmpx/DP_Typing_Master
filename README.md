@@ -5,7 +5,7 @@
 
 ![Набор фразы: опечатка подсвечена красным, комбо «в потоке», подсказка следующей клавиши](docs/screenshots/02_typing.png)
 
-**Что дальше:** [ROADMAP](ROADMAP.md) · [аудит](docs/AUDIT.md) ·
+**Что дальше:** [ROADMAP](ROADMAP.md) · [реализация PR #4](docs/ROADMAP_IMPLEMENTATION.md) · [аудит](docs/AUDIT.md) ·
 [исследование аналогов](docs/RESEARCH.md) · [изменения](CHANGELOG.md)
 
 ## Запуск
