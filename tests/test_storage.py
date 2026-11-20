@@ -103,3 +103,29 @@ def test_custom_text_round_trip(tmp_path):
     assert load_custom_text(path) is None
     assert save_custom_text("Мороз и солнце", path) is True
     assert load_custom_text(path) == "Мороз и солнце"
+
+
+def test_restore_ignores_nonfinite_negative_and_boolean_numbers():
+    """Non-standard NaN/Infinity JSON and boolean counters must not poison metrics."""
+    p = Profile()
+    restore(p, {"tests": float("nan"), "total_keystrokes": 10,
+                "total_errors": 99, "total_time": float("inf"),
+                "best_combo": True, "records": {"bad": float("inf"), "ok": 24},
+                "char_total": {"а": -3, "б": True, "в": 5},
+                "key_acc": {"а": float("nan"), "б": 0.9}})
+    assert p.tests == 0
+    assert p.total_keystrokes == 10
+    assert p.total_errors == 10
+    assert p.total_time == 0
+    assert p.best_combo == 0
+    assert p.records == {"ok": 24.0}
+    assert dict(p.char_total) == {"в": 5}
+    assert p.key_acc == {"б": 0.9}
+
+
+def test_load_nonfinite_json_does_not_break_restore(tmp_path):
+    path = tmp_path / "profile.json"
+    path.write_text('{"schema": 2, "tests": NaN, "total_time": Infinity}', encoding="utf-8")
+    p = Profile()
+    restore(p, load(path))
+    assert p.tests == 0 and p.total_time == 0

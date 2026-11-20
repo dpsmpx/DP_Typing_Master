@@ -21,7 +21,8 @@ jobs:
       - run: flake8 .
 
   test:
-    runs-on: ubuntu-latest
+    # Python 3.9 is unavailable on ubuntu-latest (26.04).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -38,3 +39,28 @@ jobs:
         env:
           DP_REQUIRE_GUI: "1"
         run: xvfb-run -a python -m pytest -q
+
+  windows-exe:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller
+      - name: Build real Windows GUI executable
+        shell: pwsh
+        run: >-
+          python -m PyInstaller --onefile --windowed
+          --name DP_Typing_Master --collect-data dp_typing
+          --noconfirm --clean DP_Typing_Master.py
+      - name: Smoke test bundled executable on Windows
+        run: python tools/smoke_exe.py dist/DP_Typing_Master.exe
+      - name: Upload executable for PR testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: DP_Typing_Master-windows
+          path: dist/DP_Typing_Master.exe
+          if-no-files-found: error
+          retention-days: 14
