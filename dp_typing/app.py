@@ -28,7 +28,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
-from . import __version__, theme
+from . import __version__, progress, progress_view, theme
 from .course import (
     DEFAULT_TARGET_WPM,
     MIN_SAMPLES,
@@ -43,7 +43,6 @@ from .course import (
 )
 from .customtext import CustomText, CustomTextError, sample
 from .engine import Mark, Profile, TypingSession
-from . import progress, progress_view
 from .fmt import count, wrap_words
 from .layout import (
     CAPS_LOCK,
