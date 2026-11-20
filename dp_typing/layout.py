@@ -90,7 +90,34 @@ JCUKEN = Layout(
     ),
 )
 
-LAYOUTS: dict[str, Layout] = {"en": QWERTY, "ru": JCUKEN}
+
+# Alternative English physical layouts. Text source stays English.
+DVORAK = Layout(
+    code="dvorak", title="Dvorak", top="',.pyfgcrl/",
+    home="aoeuidhtns-", bottom=";qjkxbmwvz",
+    anchors=("u", "h"), accusative="английскую (Dvorak)",
+    full=(
+        (chr(96) + "1234567890[]", "~!@#$%^&*(){}"),
+        ("',.pyfgcrl/=", '"<>PYFGCRL?+'),
+        ("aoeuidhtns-", "AOEUIDHTNS_"),
+        (";qjkxbmwvz", ":QJKXBMWVZ"),
+    ),
+)
+
+COLEMAK = Layout(
+    code="colemak", title="Colemak", top="qwfpgjluy;",
+    home="arstdhneio'", bottom="zxcvbkm,./",
+    anchors=("t", "n"), accusative="английскую (Colemak)",
+    full=(
+        (chr(96) + "1234567890-=", "~!@#$%^&*()_+"),
+        ("qwfpgjluy;[]\\", "QWFPGJLUY:{}|"),
+        ("arstdhneio'", 'ARSTDHNEIO"'),
+        ("zxcvbkm,./", "ZXCVBKM<>?"),
+    ),
+)
+
+LAYOUTS: dict[str, Layout] = {"en": QWERTY, "ru": JCUKEN,
+                              "dvorak": DVORAK, "colemak": COLEMAK}
 
 #: Какие нажатия засчитываются вместо символа цели. «Ё» в русских текстах
 #: пишут через раз, а на многих клавиатурах она в неудобном углу, поэтому

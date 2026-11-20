@@ -1232,3 +1232,15 @@ def test_award_unlock_is_idempotent_and_persisted(app):
     assert app._unlock_awards(99) == []
     app._persist()
     assert "ten" in storage.load()["awards"]
+
+
+def test_dvorak_keyboard_selection_preserves_english_training(app):
+    from dp_typing.layout import stroke_for
+
+    app.set_keyboard_variant("dvorak")
+    assert app.lang == "en"
+    assert app._keyboard_code() == "dvorak"
+    assert stroke_for("dvorak", "a") is not None
+    assert app.session.target
+    app.set_keyboard_variant("colemak")
+    assert app._keyboard_code() == "colemak"

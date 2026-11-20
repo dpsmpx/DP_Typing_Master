@@ -186,11 +186,14 @@ class TypingApp(tk.Tk):
             self.mode = Mode.COMMON
         # Курс: сколько букв открыто в каждом языке и целевая скорость.
         course = saved.get("course") if isinstance(saved.get("course"), dict) else {}
-        self.course = {lang: clamp_unlocked(lang, course.get(lang)) for lang in LAYOUTS}
+        self.course = {lang: clamp_unlocked(lang, course.get(lang))
+                       for lang in ("ru", "en")}
         wpm = saved.get("course_target_wpm")
         self.course_target_wpm = wpm if wpm in TARGET_SPEEDS_WPM else DEFAULT_TARGET_WPM
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
+        variant = saved.get("keyboard_variant")
+        self.keyboard_variant = variant if variant in ("dvorak", "colemak") else "en"
         self.colored_fingers = bool(saved.get("colored_fingers", False))
         self.sound_enabled = bool(saved.get("sound_enabled", False))
         self.ghost_enabled = bool(saved.get("ghost_enabled", False))
@@ -570,6 +573,14 @@ class TypingApp(tk.Tk):
                              command=self.toggle_ghost)
         settings.add_command(label="Светлая / тёмная тема (после перезапуска)",
                              command=self.toggle_theme)
+        variants = tk.Menu(menu, tearoff=0)
+        self._variant_choice = tk.StringVar(value=self.keyboard_variant)
+        for value, name in (("en", "QWERTY"), ("dvorak", "Dvorak"),
+                            ("colemak", "Colemak")):
+            variants.add_radiobutton(label=name, variable=self._variant_choice,
+                                     value=value,
+                                     command=lambda v=value: self.set_keyboard_variant(v))
+        menu.add_cascade(label="Раскладка EN", menu=variants)
         menu.add_cascade(label="Настройки", menu=settings)
         menu.add_command(label="Прогресс  ·  Ctrl+P", command=self.open_progress)
         menu.add_command(label="Справка  ·  F1", command=self.toggle_help)
@@ -1467,9 +1478,24 @@ class TypingApp(tk.Tk):
         d = self.density
         return d.kb_h + (d.kb_extra if self._kb_full else 0)
 
+    def _keyboard_code(self) -> str:
+        """Selected physical keyboard, independent of text language."""
+        return self.keyboard_variant if self.lang == "en" else self.lang
+
+    def set_keyboard_variant(self, variant: str) -> None:
+        if variant not in ("en", "dvorak", "colemak"):
+            return
+        if self.lang != "en":
+            self.lang = "en"
+        self.keyboard_variant = variant
+        self._refresh_chips()
+        self._layout_keyboard()
+        self.new_test()
+        self._persist()
+
     def _keyboard_rows(self) -> list[list[tuple[str, str, float, str]]]:
         """Ряды клавиш: (имя, подпись, ширина в клавишах, мелкая подпись Shift)."""
-        layout = LAYOUTS[self.lang]
+        layout = LAYOUTS[self._keyboard_code()]
         rows: list[list[tuple[str, str, float, str]]]
         if not self._kb_full:
             rows = [[(ch, ch.upper(), 1.0, "") for ch in row] for row in layout.display_rows]
@@ -1557,7 +1583,7 @@ class TypingApp(tk.Tk):
         ch = None
         if session and not session.finished and session.pos < len(session.target):
             ch = session.target[session.pos]
-        stroke = stroke_for(self.lang, ch) if ch else None
+        stroke = stroke_for(self._keyboard_code(), ch) if ch else None
         key = stroke.key if stroke else (ch.lower() if ch else None)
         shift = f"shift_{stroke.shift_side}" if stroke and stroke.shift_side else None
 
@@ -1687,13 +1713,13 @@ class TypingApp(tk.Tk):
 
     def _key_base(self, name: str) -> tuple[str, str]:
         """Цвета клавиши в покое: в курсе всё, кроме открытых букв, приглушено."""
-        layout = LAYOUTS[self.lang]
+        layout = LAYOUTS[self._keyboard_code()]
         if (self.mode is Mode.LESSON and len(name) == 1 and name != " "
                 and name not in self._course_letters()
                 and not (name == "ё" and "е" in self._course_letters())):
             return theme.KEY_LOCKED_BG, theme.KEY_LOCKED_FG
         if self.colored_fingers:
-            finger = finger_for(self.lang, name)
+            finger = finger_for(self._keyboard_code(), name)
             if finger is not None:
                 return theme.FINGER_ZONE_COLORS[finger], theme.TEXT
         return (theme.KEY_HOME_BG if name in layout.anchors else theme.KEY_BG), theme.KEY_FG
@@ -1776,7 +1802,8 @@ class TypingApp(tk.Tk):
         self._persist()
 
     def _refresh_chips(self) -> None:
-        self.lang_var.set("РУССКИЙ" if self.lang == "ru" else "ENGLISH")
+        self.lang_var.set("РУССКИЙ" if self.lang == "ru"
+                          else f"ENGLISH / {LAYOUTS[self._keyboard_code()].title.upper()}")
         self.mode_var.set(self.mode.title.upper())
         self.stage_var.set(f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
                            f" · ★ {awards.stars(self.course[self.lang])}"
@@ -1929,6 +1956,7 @@ class TypingApp(tk.Tk):
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
             "colored_fingers": self.colored_fingers,
+            "keyboard_variant": self.keyboard_variant,
             "sound_enabled": self.sound_enabled,
             "ghost_enabled": self.ghost_enabled,
             "light_theme": self.light_theme,
