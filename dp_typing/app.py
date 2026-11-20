@@ -185,6 +185,8 @@ class TypingApp(tk.Tk):
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
         self.length = Length.parse(saved.get("length"))
+        size = saved.get("font_delta", 0)
+        self.font_delta = max(-6, min(8, size)) if type(size) is int else 0
         self.options = TextOptions(caps=bool(saved.get("caps", False)),
                                    punct=bool(saved.get("punct", False)),
                                    digits=bool(saved.get("digits", False)))
@@ -251,6 +253,7 @@ class TypingApp(tk.Tk):
 
         self._build_fonts()
         self._build_ui()
+        self._build_menu()
         self._bind_keys()
 
         self.protocol("WM_DELETE_WINDOW", self._quit)
@@ -292,9 +295,11 @@ class TypingApp(tk.Tk):
         mono = theme.pick_family(available, theme.MONO_FAMILIES)
         ui = theme.pick_family(available, theme.UI_FAMILIES)
         d = self.density
-        self.f_target = tkfont.Font(family=mono, size=d.target)
+        self.f_target = tkfont.Font(family=mono, size=d.target + self.font_delta)
         # Для оценки «влезет ли обычная плотность» без переключения шрифтов.
-        self._f_target_normal = tkfont.Font(family=mono, size=NORMAL.target)
+        self._f_target_normal = tkfont.Font(
+            family=mono, size=NORMAL.target + self.font_delta
+        )
         self.f_stat = tkfont.Font(family=ui, size=d.stat, weight="bold")
         self.f_caption = tkfont.Font(family=ui, size=9)
         self.f_chip = tkfont.Font(family=ui, size=10, weight="bold")
@@ -514,6 +519,46 @@ class TypingApp(tk.Tk):
         self.kb_holder.pack(fill="x", pady=(self.density.gap // 2, 0),
                             before=self.footer_label)
 
+    def _build_menu(self) -> None:
+        """Mouse-accessible alternatives to function keys on laptops."""
+        menu = tk.Menu(self)
+        training = tk.Menu(menu, tearoff=0)
+        for label, callback in (
+            ("Заново  ·  Tab", self.restart_test),
+            ("Следующая фраза  ·  Esc", self.skip_test),
+            ("Язык  ·  Ctrl+1", self.toggle_language),
+            ("Режим  ·  Ctrl+2", self.cycle_mode),
+            ("Курс: следующая буква  ·  F4", self.next_stage),
+            ("Строгий режим  ·  Ctrl+3", self.toggle_strict),
+            ("Клавиатура  ·  Ctrl+4", self.toggle_keyboard),
+        ):
+            training.add_command(label=label, command=callback)
+        menu.add_cascade(label="Тренировка", menu=training)
+        settings = tk.Menu(menu, tearoff=0)
+        settings.add_command(label="Размер шрифта +  ·  Ctrl++",
+                             command=lambda: self.change_font_size(1))
+        settings.add_command(label="Размер шрифта −  ·  Ctrl+-",
+                             command=lambda: self.change_font_size(-1))
+        settings.add_command(label="Заглавные  ·  F9", command=self.toggle_caps)
+        settings.add_command(label="Пунктуация  ·  F10", command=self.toggle_punct)
+        settings.add_command(label="Цифры  ·  F11", command=self.toggle_digits)
+        menu.add_cascade(label="Настройки", menu=settings)
+        menu.add_command(label="Прогресс  ·  Ctrl+P", command=self.open_progress)
+        menu.add_command(label="Справка  ·  F1", command=self.toggle_help)
+        self.configure(menu=menu)
+        self._menu = menu
+
+    def change_font_size(self, change: int) -> None:
+        """Enlarge the typing text without affecting the keyboard fit budget."""
+        size = max(-6, min(8, self.font_delta + change))
+        if size == self.font_delta:
+            return
+        self.font_delta = size
+        self._apply_density()
+        self._rerender()
+        self._check_fit()
+        self._persist()
+
     def _build_help(self) -> None:
         self.help_frame = tk.Frame(self, bg=theme.PANEL_HI, highlightthickness=1,
                                    highlightbackground=theme.BORDER)
@@ -532,6 +577,8 @@ class TypingApp(tk.Tk):
             ("F1", "закрыть эту справку"),
             ("Ctrl+O", "открыть свой текст (.txt) и печатать его кусками"),
             ("Ctrl+P", "прогресс, график, карта ошибок и дневная цель"),
+            ("Ctrl+1 / 2 / 3 / 4", "язык / режим / строго / клавиатура"),
+            ("Ctrl++ / Ctrl+-", "увеличить / уменьшить текст"),
             ("Ctrl+Q", "выход"),
         )
         tk.Label(self.help_frame, text="Горячие клавиши", bg=theme.PANEL_HI,
@@ -558,7 +605,8 @@ class TypingApp(tk.Tk):
         """Применить размеры текущей плотности ко всем секциям."""
         d = self.density
         gap = d.gap
-        self.f_target.configure(size=d.target)
+        self.f_target.configure(size=d.target + self.font_delta)
+        self._f_target_normal.configure(size=NORMAL.target + self.font_delta)
         self.f_stat.configure(size=d.stat)
         self.f_combo.configure(size=d.combo)
         self.f_combo_big.configure(size=d.combo_big)
@@ -719,6 +767,16 @@ class TypingApp(tk.Tk):
         self.bind("<F9>", lambda _e: self._action(self.toggle_caps))
         self.bind("<F10>", lambda _e: self._action(self.toggle_punct))
         self.bind("<F11>", lambda _e: self._action(self.toggle_digits))
+        for keysym in ("equal", "plus", "KP_Add"):
+            self.bind(f"<Control-{keysym}>",
+                      lambda _e: self._action(lambda: self.change_font_size(1)))
+        for keysym in ("minus", "KP_Subtract"):
+            self.bind(f"<Control-{keysym}>",
+                      lambda _e: self._action(lambda: self.change_font_size(-1)))
+        self.bind("<Control-1>", lambda _e: self._action(self.toggle_language))
+        self.bind("<Control-2>", lambda _e: self._action(self.cycle_mode))
+        self.bind("<Control-3>", lambda _e: self._action(self.toggle_strict))
+        self.bind("<Control-4>", lambda _e: self._action(self.toggle_keyboard))
         # Сочетания с Ctrl — и на кириллической раскладке: там у клавиши Q
         # символ «й», и привязка к <Control-q> просто не срабатывала.
         for key in ("q", "Q", "Cyrillic_shorti", "Cyrillic_SHORTI"):
@@ -1801,6 +1859,7 @@ class TypingApp(tk.Tk):
             "caps": self.options.caps,
             "punct": self.options.punct,
             "digits": self.options.digits,
+            "font_delta": self.font_delta,
             **({"custom_title": self.custom.title, "custom_lang": self.custom.lang,
                 "custom_pos": self.custom.position} if self.custom else {}),
         })
