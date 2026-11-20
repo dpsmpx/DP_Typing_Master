@@ -1212,3 +1212,12 @@ def test_ghost_marker_is_bounded_and_requires_a_record(app):
     assert len(coords) == 4
     assert coords[0] >= 0
     assert coords[2] <= app._progress_w
+
+
+def test_light_theme_choice_persists_without_recoloring_live_widgets(app):
+    from dp_typing import storage
+
+    assert not app.light_theme
+    app.toggle_theme()
+    assert app.light_theme
+    assert storage.load()["light_theme"] is True

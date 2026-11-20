@@ -151,6 +151,13 @@ def _lerp_hex(a: str, b: str, t: float) -> str:
 
 class TypingApp(tk.Tk):
     def __init__(self) -> None:
+        saved = load_profile()
+        theme.activate(bool(saved.get("light_theme", False)))
+        NOTICE_COLORS.update({
+            "warn": (theme.WARN, theme.BG),
+            "danger": (theme.BAD, theme.BG),
+            "info": (theme.ACCENT, "#ffffff"),
+        })
         super().__init__()
         self.scale = self._detect_scale()
         self._normal = NORMAL.scaled(self.scale)
@@ -166,7 +173,6 @@ class TypingApp(tk.Tk):
         # ---- состояние
         self.rng = random.Random()
         self.profile = Profile()
-        saved = load_profile()
         restore_profile(self.profile, saved)
         progress.migrate_legacy(self.profile)
         saved_lang = saved.get("lang")
@@ -188,6 +194,7 @@ class TypingApp(tk.Tk):
         self.colored_fingers = bool(saved.get("colored_fingers", False))
         self.sound_enabled = bool(saved.get("sound_enabled", False))
         self.ghost_enabled = bool(saved.get("ghost_enabled", False))
+        self.light_theme = bool(saved.get("light_theme", False))
         self.length = Length.parse(saved.get("length"))
         size = saved.get("font_delta", 0)
         self.font_delta = max(-6, min(8, size)) if type(size) is int else 0
@@ -555,6 +562,8 @@ class TypingApp(tk.Tk):
                              command=self.toggle_sound)
         settings.add_command(label="Каретка темпа рекорда",
                              command=self.toggle_ghost)
+        settings.add_command(label="Светлая / тёмная тема (после перезапуска)",
+                             command=self.toggle_theme)
         menu.add_cascade(label="Настройки", menu=settings)
         menu.add_command(label="Прогресс  ·  Ctrl+P", command=self.open_progress)
         menu.add_command(label="Справка  ·  F1", command=self.toggle_help)
@@ -1691,6 +1700,11 @@ class TypingApp(tk.Tk):
         self._refresh_hint()
         self.restart_test()
 
+    def toggle_theme(self) -> None:
+        self.light_theme = not self.light_theme
+        self._persist()
+        self._show_notice("Тема сохранена — перезапустите приложение")
+
     def toggle_ghost(self) -> None:
         self.ghost_enabled = not self.ghost_enabled
         self._update_progress()
@@ -1900,6 +1914,7 @@ class TypingApp(tk.Tk):
             "colored_fingers": self.colored_fingers,
             "sound_enabled": self.sound_enabled,
             "ghost_enabled": self.ghost_enabled,
+            "light_theme": self.light_theme,
             "length": self.length.key,
             "caps": self.options.caps,
             "punct": self.options.punct,
