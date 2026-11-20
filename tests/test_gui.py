@@ -1252,3 +1252,18 @@ def test_ukrainian_and_belarusian_language_cycle(app):
         app.toggle_language()
         assert app.session is not None and app.session.target
     assert app.lang == initial
+
+
+def test_alt_or_command_shortcut_is_not_counted_as_typing(app):
+    for modifier in (0x8, 0x10, 0x4):
+        app._on_key(type("Event", (), {
+            "char": "q", "keysym": "q", "state": modifier,
+        })())
+    assert app.session.keystrokes == 0
+
+
+def test_altgr_printable_character_is_counted(app):
+    app._on_key(type("Event", (), {
+        "char": "а", "keysym": "a", "state": 0x4 | 0x8,
+    })())
+    assert app.session.keystrokes == 1

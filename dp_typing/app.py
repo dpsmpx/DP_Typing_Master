@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 import time
 import tkinter as tk
 from contextlib import suppress
@@ -833,6 +834,10 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
             self.bind(f"<Control-{key}>", lambda _e: self._action(self.open_custom_text))
         for key in ("p", "P", "Cyrillic_ze", "Cyrillic_ZE"):
             self.bind(f"<Control-{key}>", lambda _e: self._action(self.open_progress))
+        if sys.platform == "darwin":
+            self.bind("<Command-q>", lambda _e: self._quit())
+            self.bind("<Command-o>", lambda _e: self._action(self.open_custom_text))
+            self.bind("<Command-p>", lambda _e: self._action(self.open_progress))
 
     @staticmethod
     def _action(fn) -> str:
@@ -856,7 +861,12 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         self.new_test()
 
     def _on_key(self, event: tk.Event) -> str | None:
-        if event.state & 0x4:  # Control — это команда, а не символ
+        # Ctrl, Alt and Command are application/system shortcuts, not typing.
+        # On Windows AltGr is Ctrl+Alt: accept the resulting printable symbol.
+        state = event.state
+        ctrl, alt, command = bool(state & 0x4), bool(state & 0x8), bool(state & 0x10)
+        altgr = ctrl and alt and len(event.char) == 1 and event.char.isprintable()
+        if (ctrl or alt or command) and not altgr:
             return None
         if self.help_open:
             return "break"     # справка модальна: печать в тест не уходит
