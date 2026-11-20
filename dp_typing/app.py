@@ -52,6 +52,7 @@ from .layout import (
     WRONG_LAYOUT,
     input_problem,
     stroke_for,
+    finger_for,
 )
 from .storage import load as load_profile
 from .storage import load_custom_text, save_custom_text
@@ -184,6 +185,7 @@ class TypingApp(tk.Tk):
         self.course_target_wpm = wpm if wpm in TARGET_SPEEDS_WPM else DEFAULT_TARGET_WPM
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
+        self.colored_fingers = bool(saved.get("colored_fingers", False))
         self.length = Length.parse(saved.get("length"))
         size = saved.get("font_delta", 0)
         self.font_delta = max(-6, min(8, size)) if type(size) is int else 0
@@ -542,6 +544,8 @@ class TypingApp(tk.Tk):
         settings.add_command(label="Заглавные  ·  F9", command=self.toggle_caps)
         settings.add_command(label="Пунктуация  ·  F10", command=self.toggle_punct)
         settings.add_command(label="Цифры  ·  F11", command=self.toggle_digits)
+        settings.add_command(label="Цветные зоны пальцев",
+                             command=self.toggle_finger_zones)
         menu.add_cascade(label="Настройки", menu=settings)
         menu.add_command(label="Прогресс  ·  Ctrl+P", command=self.open_progress)
         menu.add_command(label="Справка  ·  F1", command=self.toggle_help)
@@ -1644,6 +1648,10 @@ class TypingApp(tk.Tk):
                 and name not in self._course_letters()
                 and not (name == "ё" and "е" in self._course_letters())):
             return theme.KEY_LOCKED_BG, theme.KEY_LOCKED_FG
+        if self.colored_fingers:
+            finger = finger_for(self.lang, name)
+            if finger is not None:
+                return theme.FINGER_ZONE_COLORS[finger], theme.TEXT
         return (theme.KEY_HOME_BG if name in layout.anchors else theme.KEY_BG), theme.KEY_FG
 
     def _refresh_course_keys(self) -> None:
@@ -1662,6 +1670,11 @@ class TypingApp(tk.Tk):
         self.strict = not self.strict
         self._refresh_hint()
         self.restart_test()
+
+    def toggle_finger_zones(self) -> None:
+        self.colored_fingers = not self.colored_fingers
+        self._refresh_course_keys()
+        self._persist()
 
     def toggle_keyboard(self) -> None:
         self.show_keyboard = not self.show_keyboard
@@ -1855,6 +1868,7 @@ class TypingApp(tk.Tk):
             "course_target_wpm": self.course_target_wpm,
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
+            "colored_fingers": self.colored_fingers,
             "length": self.length.key,
             "caps": self.options.caps,
             "punct": self.options.punct,

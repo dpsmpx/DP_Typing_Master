@@ -1175,3 +1175,17 @@ def test_font_size_shortcuts_change_text_size_and_persist(app):
     assert saved.get("font_delta") == app.font_delta
     app.change_font_size(-1)
     assert app.f_target.actual("size") == before
+
+
+def test_finger_zone_colors_toggle_without_touching_training_state(app):
+    from dp_typing import theme
+
+    app._layout_keyboard()
+    start = app.session.target
+    app.toggle_finger_zones()
+    assert app.colored_fingers
+    color, _ = app._key_base("а" if app.lang == "ru" else "f")
+    assert color in theme.FINGER_ZONE_COLORS
+    assert app.session.target == start
+    app.toggle_finger_zones()
+    assert not app.colored_fingers

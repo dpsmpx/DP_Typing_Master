@@ -43,6 +43,12 @@ KEY_HOME_BG = "#232b38"
 KEY_LOCKED_BG = "#13171e"
 KEY_LOCKED_FG = "#353c4a"
 
+# Finger zones: left and right hand are visually distinct, without timers.
+FINGER_ZONE_COLORS = (
+    "#4e324c", "#50402c", "#324c4e", "#32445f",
+    "#305346", "#424664", "#5b4140", "#4d3e5d", "#3c4147",
+)
+
 # ------------------------------------------------------------------ комбо
 
 
