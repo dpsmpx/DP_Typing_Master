@@ -1201,3 +1201,14 @@ def test_optional_sound_plays_for_key_and_error(app, monkeypatch):
     press(app, app.session.target[0])
     press(app, "♜")
     assert events == [True, False]
+
+
+def test_ghost_marker_is_bounded_and_requires_a_record(app):
+    app.profile.records[app._record_key()] = 60.0
+    app.toggle_ghost()
+    press(app, app.session.target[0])
+    app._update_progress()
+    coords = app.progress.coords(app._ghost_marker)
+    assert len(coords) == 4
+    assert coords[0] >= 0
+    assert coords[2] <= app._progress_w

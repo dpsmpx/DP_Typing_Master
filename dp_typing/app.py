@@ -187,6 +187,7 @@ class TypingApp(tk.Tk):
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
         self.colored_fingers = bool(saved.get("colored_fingers", False))
         self.sound_enabled = bool(saved.get("sound_enabled", False))
+        self.ghost_enabled = bool(saved.get("ghost_enabled", False))
         self.length = Length.parse(saved.get("length"))
         size = saved.get("font_delta", 0)
         self.font_delta = max(-6, min(8, size)) if type(size) is int else 0
@@ -440,6 +441,9 @@ class TypingApp(tk.Tk):
         self._progress_bar = self.progress.create_rectangle(
             0, 0, 0, bar_h, fill=theme.ACCENT, width=0
         )
+        self._ghost_marker = self.progress.create_rectangle(
+            0, 0, 0, 0, fill=theme.WARN, width=0
+        )
         self.progress.bind("<Configure>", self._on_progress_configure)
 
     def _build_text(self, parent: tk.Frame) -> None:
@@ -549,6 +553,8 @@ class TypingApp(tk.Tk):
                              command=self.toggle_finger_zones)
         settings.add_command(label="Звук нажатий и ошибок",
                              command=self.toggle_sound)
+        settings.add_command(label="Каретка темпа рекорда",
+                             command=self.toggle_ghost)
         menu.add_cascade(label="Настройки", menu=settings)
         menu.add_command(label="Прогресс  ·  Ctrl+P", command=self.open_progress)
         menu.add_command(label="Справка  ·  F1", command=self.toggle_help)
@@ -1299,6 +1305,15 @@ class TypingApp(tk.Tk):
         if self._progress_w > 1 and session is not None:
             filled = self._progress_w * session.pos / len(session.target)
             self.progress.coords(self._progress_bar, 0, 0, filled, self.px(3))
+            record_wpm = self.profile.record(self._record_key()) if self.ghost_enabled else 0
+            if record_wpm and session.started:
+                expected_chars = session.elapsed() * record_wpm * 5 / 60
+                ghost_x = min(self._progress_w - 2,
+                              self._progress_w * expected_chars / len(session.target))
+                self.progress.coords(self._ghost_marker, ghost_x, 0, ghost_x + 2,
+                                     self.px(3))
+            else:
+                self.progress.coords(self._ghost_marker, 0, 0, 0, 0)
 
     def _refresh_session_line(self) -> None:
         p = self.profile
@@ -1676,6 +1691,11 @@ class TypingApp(tk.Tk):
         self._refresh_hint()
         self.restart_test()
 
+    def toggle_ghost(self) -> None:
+        self.ghost_enabled = not self.ghost_enabled
+        self._update_progress()
+        self._persist()
+
     def toggle_sound(self) -> None:
         self.sound_enabled = not self.sound_enabled
         self._persist()
@@ -1879,6 +1899,7 @@ class TypingApp(tk.Tk):
             "show_keyboard": self.show_keyboard,
             "colored_fingers": self.colored_fingers,
             "sound_enabled": self.sound_enabled,
+            "ghost_enabled": self.ghost_enabled,
             "length": self.length.key,
             "caps": self.options.caps,
             "punct": self.options.punct,
