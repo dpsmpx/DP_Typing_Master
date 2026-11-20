@@ -262,3 +262,10 @@ def test_adaptive_weights_boost_weak_bigrams():
     words = ["alpha", "abacus", "aba"]
     weights = adaptive_weights(words, (), weak_bigrams=(("ab", 0.8),))
     assert weights[1] == weights[2] > weights[0]
+
+
+@pytest.mark.parametrize("lang", ["uk", "be"])
+def test_new_language_starter_corpora_produce_training_text(lang):
+    assert len(load_words(lang)) >= 80
+    sentence = TextSource(lang, Mode.COMMON).phrase(10)
+    assert len(sentence.split()) == 10
