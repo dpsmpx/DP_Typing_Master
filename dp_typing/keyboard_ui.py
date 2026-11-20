@@ -64,7 +64,7 @@ class KeyboardMixin:
                              for base, up in zip(plain, shifted)])
             rows[-1] = [("shift_left", "SHIFT", SHIFT_UNITS, ""), *rows[-1],
                         ("shift_right", "SHIFT", SHIFT_UNITS, "")]
-        rows.append([(" ", "ПРОБЕЛ", SPACE_UNITS, "")])
+        rows.append([(" ", self._tr("ПРОБЕЛ"), SPACE_UNITS, "")])
         return rows
 
     def _layout_keyboard(self) -> None:

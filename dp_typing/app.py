@@ -518,7 +518,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         c = self.combo_canvas
         self._combo_value = c.create_text(0, 0, text="0", fill=theme.TEXT_FAINT,
                                           font=self.f_combo, anchor="center")
-        self._combo_caption = c.create_text(0, 0, text="КОМБО", fill=theme.TEXT_FAINT,
+        self._combo_caption = c.create_text(0, 0, text=self._tr("КОМБО"), fill=theme.TEXT_FAINT,
                                             font=self.f_caption, anchor="center")
         self._combo_bar_bg = c.create_rectangle(0, 0, 0, 0, fill=theme.PANEL, width=0)
         self._combo_bar = c.create_rectangle(0, 0, 0, 0, fill=theme.TEXT_FAINT, width=0)
@@ -1134,7 +1134,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         if self.mode is Mode.LESSON:
             opened = self._course_progress()
             if opened:
-                self.result_var.set(self.result_var.get() + f"  →  новая буква «{opened}»")
+                self.result_var.set(self.result_var.get() + self._tr(f"  →  новая буква «{opened}»"))
             self._refresh_chips()
             self._refresh_course_keys()
 
@@ -1383,12 +1383,12 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_HI, fg=theme.TEXT,
                        activebackground=theme.ACCENT, activeforeground="#ffffff",
                        selectcolor=theme.ACCENT, font=self.f_hint, borderwidth=0)
-        menu.add_command(label="Открыть следующую букву  (F4)", command=self.next_stage)
-        menu.add_command(label="Убрать последнюю букву  (Shift+F4)", command=self.prev_stage)
+        menu.add_command(label=self._tr("Открыть следующую букву  (F4)"), command=self.next_stage)
+        menu.add_command(label=self._tr("Убрать последнюю букву  (Shift+F4)"), command=self.prev_stage)
         menu.add_separator()
         self._target_choice = tk.IntVar(value=self.course_target_wpm)
         for wpm in TARGET_SPEEDS_WPM:
-            menu.add_radiobutton(label=f"Цель: {wpm} слов/мин", value=wpm,
+            menu.add_radiobutton(label=self._tr(f"Цель: {wpm} слов/мин"), value=wpm,
                                  variable=self._target_choice,
                                  command=lambda w=wpm: self.set_course_target(w))
         chip = self._chips[2]
@@ -1595,7 +1595,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         tile, row = self.stat_tiles[-1], self._stats_row
         col = 2 * (len(self.stat_tiles) - 1)
         if caption:
-            self._extra_caption.configure(text=caption)
+            self._extra_caption.configure(text=self._tr(caption))
             if not self._extra_shown:
                 tile.grid()
                 row.columnconfigure(col, weight=1, uniform="tile")
@@ -1623,7 +1623,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
             label = {"phrase": "одна фраза",
                      "words": f"{length.amount} слов",
                      "time": f"{length.amount} секунд"}[length.kind]
-            menu.add_radiobutton(label=label, variable=self._length_choice,
+            menu.add_radiobutton(label=self._tr(label), variable=self._length_choice,
                                  value=length.key,
                                  command=lambda chosen=length: self.set_length(chosen))
         chip = self._length_chip

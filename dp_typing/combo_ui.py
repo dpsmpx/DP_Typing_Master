@@ -67,7 +67,7 @@ class ComboMixin:
             c.coords(self._combo_value, mid, value_y)
             c.coords(self._combo_caption, mid, caption_y)
             caption = f"КОМБО · {tier.name.upper()}" if tier.name else "КОМБО"
-            c.itemconfigure(self._combo_caption, text=caption, fill=tier.color)
+            c.itemconfigure(self._combo_caption, text=self._tr(caption), fill=tier.color)
             c.itemconfigure(self._combo_bar, fill=tier.color)
             c.coords(self._combo_bar_bg, left, bar_y, left + bar_w, bar_y + bar_h)
 

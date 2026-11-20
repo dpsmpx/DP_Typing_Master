@@ -20,7 +20,7 @@ def chart_points(rows: list[dict], key: str, height: int,
     return [max(0.0, min(float(row.get(key) or 0), top)) / top * height for row in rows]
 
 
-def _chart(parent: tk.Widget, rows: list[dict]) -> None:
+def _chart(parent: tk.Widget, rows: list[dict], tr=lambda value: value) -> None:
     canvas = tk.Canvas(parent, bg=theme.PANEL, height=230, highlightthickness=0)
     canvas.pack(fill="x", padx=16, pady=(4, 12))
     canvas.update_idletasks()
@@ -30,7 +30,7 @@ def _chart(parent: tk.Widget, rows: list[dict]) -> None:
         y = top + (bottom - top) * i / 4
         canvas.create_line(left, y, right, y, fill=theme.BORDER)
     if not rows:
-        canvas.create_text(w / 2, 110, text="Пока нет завершённых тренировок",
+        canvas.create_text(w / 2, 110, text=tr("Пока нет завершённых тренировок"),
                            fill=theme.TEXT_DIM)
         return
     max_wpm = max(60.0, max(float(row["wpm"]) for row in rows) * 1.2)
@@ -49,9 +49,9 @@ def _chart(parent: tk.Widget, rows: list[dict]) -> None:
                        anchor="w")
     canvas.create_text(right, 209, text=rows[-1]["day"], fill=theme.TEXT_DIM,
                        anchor="e")
-    canvas.create_text(left, 10, text=f"Скорость (до {max_wpm:.0f})",
+    canvas.create_text(left, 10, text=tr(f"Скорость (до {max_wpm:.0f})"),
                        fill=theme.ACCENT, anchor="w")
-    canvas.create_text(right, 10, text="Точность (до 100%)",
+    canvas.create_text(right, 10, text=tr("Точность (до 100%)"),
                        fill=theme.GOOD, anchor="e")
 
 
@@ -84,7 +84,7 @@ def _heatmap(parent: tk.Widget, app) -> None:
 
 def show(app) -> tk.Toplevel:
     window = tk.Toplevel(app)
-    window.title("DP Typing Master — прогресс")
+    window.title(app._tr("DP Typing Master — прогресс"))
     window.configure(bg=theme.BG)
     window.geometry("860x810")
     window.minsize(600, 500)
@@ -100,36 +100,36 @@ def show(app) -> tk.Toplevel:
     scroll.bind("<Configure>", lambda e: scroll.itemconfigure(item, width=e.width))
 
     goal = progress.daily_goal()
-    _heading(content, "ПРОГРЕСС")
+    _heading(content, app._tr("ПРОГРЕСС"))
     tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM,
-             text=(f"Сегодня: {goal['done']}/{goal['goal']} тренировок · "
-                   f"Серия: {goal['streak']} дн.")).pack(anchor="w", padx=16)
-    _heading(content, "Скорость и точность по дням")
-    _chart(content, progress.daily(30))
+             text=app._tr(f"Сегодня: {goal['done']}/{goal['goal']} тренировок · "
+                          f"Серия: {goal['streak']} дн.")).pack(anchor="w", padx=16)
+    _heading(content, app._tr("Скорость и точность по дням"))
+    _chart(content, progress.daily(30), app._tr)
 
-    _heading(content, "Карта ошибок — клавиатура")
+    _heading(content, app._tr("Карта ошибок — клавиатура"))
     tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM,
-             text="Зелёный — точно, жёлтый — 5%+ ошибок, красный — 20%+; "
-                  "серый — мало данных. Наведите на клавишу.").pack(
+             text=app._tr("Зелёный — точно, жёлтый — 5%+ ошибок, красный — 20%+; "
+                          "серый — мало данных. Наведите на клавишу.")).pack(
                       anchor="w", padx=16, pady=6)
     _heatmap(content, app)
 
-    _heading(content, "Слабые сочетания")
+    _heading(content, app._tr("Слабые сочетания"))
     pairs = app.profile.weak_bigrams()
     tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM, wraplength=780,
              text=(", ".join(f"{pair}: {rate:.0%}" for pair, rate in pairs)
-                   if pairs else "Пока мало данных")).pack(anchor="w", padx=16)
+                   if pairs else app._tr("Пока мало данных"))).pack(anchor="w", padx=16)
 
-    _heading(content, "Награды")
+    _heading(content, app._tr("Награды"))
     unlocked = sorted(app.achievements)
-    label = (", ".join(awards.MILESTONES[k] for k in unlocked)
-             if unlocked else "Пока нет наград")
+    label = (", ".join(app._tr(awards.MILESTONES[k]) for k in unlocked)
+             if unlocked else app._tr("Пока нет наград"))
     stars = awards.stars(app.course[app.lang])
     tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM,
-             text=f"Курс: ★ {stars} · {label}", wraplength=780).pack(
+             text=app._tr(f"Курс: ★ {stars} · {label}"), wraplength=780).pack(
                  anchor="w", padx=16)
 
-    _heading(content, "Последний результат")
+    _heading(content, app._tr("Последний результат"))
     session = app.session
     if session is not None and session.finished:
         errors = sorted(session.char_errors.items(), key=lambda item: -item[1])
@@ -144,16 +144,16 @@ def show(app) -> tk.Toplevel:
     else:
         detail = "Завершите тренировку, чтобы увидеть разбор ошибок и ритма."
     tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM, justify="left",
-             text=detail, wraplength=780).pack(anchor="w", padx=16, pady=(3, 12))
+             text=app._tr(detail), wraplength=780).pack(anchor="w", padx=16, pady=(3, 12))
 
-    _heading(content, "Последние завершённые тесты")
+    _heading(content, app._tr("Последние завершённые тесты"))
     for row in progress.recent(10):
         text = (f"{row['created_at'][:16]} · {row['lang']}/{row['mode']} · "
                 f"{row['wpm']:.0f} слов/мин · {row['accuracy']:.0f}% · "
                 f"{row['errors']} ошибок")
         tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM,
-                 text=text).pack(anchor="w", padx=16, pady=2)
-    tk.Button(content, text="Закрыть", command=window.destroy).pack(pady=20)
+                 text=app._tr(text)).pack(anchor="w", padx=16, pady=2)
+    tk.Button(content, text=app._tr("Закрыть"), command=window.destroy).pack(pady=20)
     window.transient(app)
     window.focus_set()
     return window

@@ -74,7 +74,7 @@ class StatsMixin:
         if p.tests == 0:
             self.session_var.set("")
             return
-        self.session_var.set(
+        self.session_var.set(self._tr(
             f"Всего: {count(p.tests, 'тест', 'теста', 'тестов')} · {p.wpm:.0f} слов/мин · "
             f"{p.accuracy:.0f}% · лучшее комбо ×{p.best_combo}"
-        )
+        ))

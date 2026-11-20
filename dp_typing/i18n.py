@@ -62,6 +62,91 @@ ENGLISH = {
 }
 
 
+# Complete visible strings for menus, prompts, the results dashboard and hints.
+# Whole phrases precede their component words in translate().
+ENGLISH.update({
+    "ПРОБЕЛ": "SPACE",
+    "разогрев": "warmup", "в потоке": "in the zone", "разгон": "speeding up",
+    "огонь": "on fire", "легенда": "legend",
+    "левый мизинец": "left pinky", "левый безымянный": "left ring finger",
+    "левый средний": "left middle finger",
+    "левый указательный": "left index finger",
+    "правый мизинец": "right pinky", "правый безымянный": "right ring finger",
+    "правый средний": "right middle finger",
+    "правый указательный": "right index finger", "большой": "thumb",
+    "правой рукой": "with right hand", "левой рукой": "with left hand",
+    "можно и": "also accepts",
+    "Карта ошибок на клавиатуре": "Keyboard error heatmap",
+    "Курс: следующая буква": "Course: next letter",
+    "Прогресс": "Progress",
+    "Курс: ★": "Course: ★",
+    "Открыть следующую букву": "Unlock next letter",
+    "Убрать последнюю букву": "Remove last letter",
+    "Цель:": "Target:",
+    "Открыты все буквы": "All letters unlocked",
+    "Это начало курса": "This is the first stage",
+    "одна фраза": "one phrase", "секунд": "seconds", "дн.": "days",
+    "знака": "characters", "знаков": "characters", "знак": "character",
+    "Скорость (до": "Speed (up to",
+    "Точность (до 100%)": "Accuracy (up to 100%)",
+    "Сегодня:": "Today:", "Серия:": "Streak:", "тренировок": "tests",
+    "Карта ошибок — клавиатура": "Keyboard error heatmap",
+    "Зелёный — точно, жёлтый — 5%+ ошибок, красный — 20%+; серый — мало данных. Наведите на клавишу.":
+        "Green: accurate; yellow: 5%+ errors; red: 20%+; gray: too little data. Hover over a key.",
+    "нет": "none", "пока недостаточно данных": "not enough data yet",
+    "Завершите тренировку, чтобы увидеть разбор ошибок и ритма.":
+        "Complete a test to see error and timing details.",
+    "Последние завершённые тесты": "Recent completed tests",
+    "Первый завершённый тест": "First completed test",
+    "Комбо 50": "Combo 50", "Комбо 100": "Combo 100",
+    "Точность не ниже 98%": "Accuracy of at least 98%",
+    "пауза — время не идёт, продолжайте печатать":
+        "Paused — typing time is stopped; continue typing",
+    "пропустить фразу / закрыть справку": "skip phrase / close help",
+    "начать эту фразу заново": "restart the same phrase",
+    "язык: русский / английский": "language: Russian / English",
+    "режим тренировки": "training mode",
+    "курс: открыть следующую букву / убрать последнюю":
+        "course: unlock next letter / remove previous",
+    "строгий режим (не пускает дальше при ошибке)": "strict mode (errors stop progress)",
+    "показать / скрыть экранную клавиатуру": "show / hide the on-screen keyboard",
+    "сбросить всю накопленную статистику": "reset all accumulated statistics",
+    "длина теста: фраза, 10–100 слов, 15–120 секунд":
+        "test length: phrase, 10–100 words, 15–120 seconds",
+    "заглавные / знаки препинания / цифры": "capital letters / punctuation / digits",
+    "открыть свой текст (.txt) и печатать его кусками":
+        "open custom text (.txt) and practice in chunks",
+    "прогресс, график, карта ошибок и дневная цель":
+        "progress, chart, error heatmap and daily goal",
+    "язык / режим / строго / клавиатура": "language / mode / strict / keyboard",
+    "увеличить / уменьшить текст": "increase / decrease text size",
+    "«Ё» засчитывается и нажатием «Е».": "You can type 'Е' instead of 'Ё'.",
+    "После 5 секунд без нажатий время не идёт.":
+        "The clock pauses after five seconds of inactivity.",
+    "Тема сохранена — перезапустите приложение":
+        "Theme saved — restart the application",
+    "Язык интерфейса сохранён — перезапустите приложение":
+        "Interface language saved — restart the application",
+    "Язык задаёт открытый текст — Ctrl+O откроет другой":
+        "The current text determines its language — press Ctrl+O to open another",
+    "Текст пройден — начинаем сначала": "Text complete — starting again",
+    "пример текста": "sample text", "открыть свой": "open your",
+    "Открыть текст для тренировки": "Open a text file to practice",
+    "Все файлы": "All files", "Текст": "Text",
+    "Открыт": "Opened", "нет текста": "no text",
+    "любая клавиша — дальше": "any key — continue",
+    "Tab — ещё раз": "Tab — again", "F1 — справка": "F1 — help",
+    "Esc — дальше": "Esc — next", "Tab — заново": "Tab — restart",
+    "строгий режим включён": "strict mode enabled",
+    "клавиатура скрыта (F6)": "keyboard hidden (F6)",
+    "лучшее комбо": "best combo",
+    "новая буква": "new letter",
+    "Комбо": "Combo",
+    "Статистика": "Statistics",
+    "шаг": "step",
+    "с": "s",
+})
+
 def translate(message: str, language: str = "ru") -> str:
     if language != "en":
         return message
