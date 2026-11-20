@@ -1096,3 +1096,46 @@ def test_unhashable_profile_languages_do_not_crash_startup(tmp_path, monkeypatch
         assert window.custom is None
     finally:
         window.destroy()
+
+
+def test_blank_saved_custom_text_cannot_crash_startup(tmp_path, monkeypatch):
+    """An edited custom.txt containing only spaces must fall back to the sample."""
+    import json
+
+    from dp_typing import app as app_module
+    from dp_typing import storage
+
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps({"schema": 2, "mode": "custom", "lang": "ru",
+                                "custom_lang": "ru"}), encoding="utf-8")
+    (tmp_path / "custom.txt").write_text("   ", encoding="utf-8")
+    monkeypatch.setattr(storage, "config_path", lambda: path)
+    window = _make_window(app_module)
+    try:
+        assert window.custom is None
+        assert window.session is not None and window.session.target
+    finally:
+        window.destroy()
+
+
+def test_restored_custom_text_uses_detected_language(tmp_path, monkeypatch):
+    """An inconsistent saved layout must not make the custom text untypeable."""
+    import json
+
+    from dp_typing import app as app_module
+    from dp_typing import storage
+
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps({"schema": 2, "mode": "custom", "lang": "ru",
+                                "custom_lang": "ru"}), encoding="utf-8")
+    (tmp_path / "custom.txt").write_text(
+        "hello this is a long enough English example for a typing exercise", encoding="utf-8"
+    )
+    monkeypatch.setattr(storage, "config_path", lambda: path)
+    window = _make_window(app_module)
+    try:
+        assert window.custom is not None
+        assert window.lang == window.custom.lang == "en"
+        assert window.session is not None and window.session.target
+    finally:
+        window.destroy()

@@ -191,6 +191,9 @@ class TypingApp(tk.Tk):
         self.source = TextSource(self.lang, self.mode, self.rng, self.options)
         # Свой текст (Ctrl+O) и закладка в нём; пока не открыт — встроенный пример.
         self.custom = self._restore_custom(saved)
+        if self.mode is Mode.CUSTOM and self.custom is not None:
+            # The saved UI language can disagree with the copied text.
+            self.lang = self.custom.lang
         self._samples: dict[str, CustomText] = {}
         self._custom_chunk = ""
         self.session: TypingSession | None = None
@@ -1019,12 +1022,21 @@ class TypingApp(tk.Tk):
         lang = saved.get("custom_lang")
         if not text or not isinstance(lang, str) or lang not in LAYOUTS:
             return None
-        position = saved.get("custom_pos", 0)
-        if not isinstance(position, int) or not 0 <= position < len(text):
-            position = 0
         title = saved.get("custom_title")
-        return CustomText(title=title if isinstance(title, str) else "Свой текст",
-                          text=text, lang=lang, position=position)
+        try:
+            # The cached file can have been edited since the last launch.
+            # Revalidate it to avoid constructing an empty TypingSession.
+            restored = CustomText.from_string(
+                text, title=title if isinstance(title, str) else "Свой текст"
+            )
+        except CustomTextError:
+            return None
+        position = saved.get("custom_pos", 0)
+        if (not isinstance(position, int) or isinstance(position, bool)
+                or not 0 <= position < len(restored.text)):
+            position = 0
+        restored.position = position
+        return restored
 
     def _custom_source(self) -> CustomText:
         """Свой текст, если открыт, иначе встроенный пример на текущем языке."""
