@@ -144,7 +144,6 @@ ENGLISH.update({
     "Комбо": "Combo",
     "Статистика": "Statistics",
     "шаг": "step",
-    "с": "s",
 })
 
 def translate(message: str, language: str = "ru") -> str:
