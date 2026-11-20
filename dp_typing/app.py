@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-import math
 import random
 import sys
 import time
@@ -30,6 +29,7 @@ from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
 from . import __version__, awards, i18n, progress, progress_view, sound, theme
+from .combo_ui import ComboMixin
 from .course import (
     DEFAULT_TARGET_WPM,
     MIN_SAMPLES,
@@ -42,7 +42,6 @@ from .course import (
     letter_order,
     target_cpm,
 )
-from .combo_ui import ComboMixin
 from .customtext import CustomText, CustomTextError, sample
 from .engine import Mark, Profile, TypingSession
 from .fmt import count, wrap_words
@@ -50,13 +49,11 @@ from .keyboard_ui import KeyboardMixin
 from .layout import (
     CAPS_LOCK,
     EQUIVALENTS,
-    FINGER_NAMES,
     LANGUAGES,
     LAYOUTS,
     WRONG_LAYOUT,
     finger_for,
     input_problem,
-    stroke_for,
 )
 from .stats_ui import StatsMixin
 from .storage import load as load_profile
