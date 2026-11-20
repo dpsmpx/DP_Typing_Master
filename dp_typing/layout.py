@@ -152,6 +152,8 @@ LAYOUTS: dict[str, Layout] = {
 EQUIVALENTS: dict[str, dict[str, str]] = {
     "ru": {"ё": "е", "Ё": "Е"},
     "en": {},
+    "uk": {},
+    "be": {},
 }
 
 
