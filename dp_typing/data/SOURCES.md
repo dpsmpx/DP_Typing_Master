@@ -2,7 +2,7 @@
 
 `ru_common.txt` и `en_common.txt` — частотная лексика, отобранная из
 [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords)
-(корпус субтитров OpenSubtitles 2018, лицензия MIT).
+(корпус субтитров OpenSubtitles 2018; данные CC BY-SA 4.0, код MIT).
 
 Как получены списки:
 
@@ -16,11 +16,24 @@
    алфавита осталась бы без тренировки.
 
 Оба списка покрывают алфавит целиком: 33 буквы для русского, 26 для
-английского. Лицензия MIT совместима с GPL-3.0 этого проекта.
+английского. Исходный список слов — адаптация данных CC BY-SA 4.0; код генератора MIT.
+Для текста данных сохраняются обязательства атрибуции и ShareAlike.
 
-## Additional starter languages (November 2026)
+## Ukrainian frequency-informed dataset (November 2026)
 
-`uk_common.txt` and `be_common.txt` are small manually assembled starter
-lexicons for offline Ukrainian and Belarusian training. They are **not**
-frequency-ranked 1200-word dictionaries; linguistic review and expansion remain
-necessary before they can claim parity with ru/en. Example files are bundled.
+`uk_common.txt` — 1200 уникальных слов, отобранных из
+[FrequencyWords, Ukrainian OpenSubtitles 2018](https://github.com/hermitdave/FrequencyWords/blob/master/content/2018/uk/uk_50k.txt)
+(CC BY-SA 4.0, source: OpenSubtitles 2018). Это *адаптированный* список:
+выбраны 1198 слов из частотного порядка с буквенным фильтром (2–12 букв,
+украинский алфавит, наличие гласной), сравнением с русским частотным списком
+для отсева очевидных русских субтитровых вставок (отношение частот ≥0.08,
+исключая известные общие слова); две дополнительные формы «ґрунт»,
+«ґудзик» обеспечивают тренировку буквы ґ. Фильтрация и ручное дополнение
+нарушают буквальный рейтинг исходного списка; это не выверенный
+лингвистами официальный «топ-1200». Требуется вычитка носителем языка.
+
+## Belarusian starter dataset
+
+`be_common.txt` — небольшой вручную подготовленный набор, не
+частотный корпус 1200 слов; для паритета необходим независимый
+лицензионно-проверенный источник и вычитка носителем языка.
