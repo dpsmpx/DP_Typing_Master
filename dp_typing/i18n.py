@@ -91,8 +91,10 @@ ENGLISH.update({
     "Точность (до 100%)": "Accuracy (up to 100%)",
     "Сегодня:": "Today:", "Серия:": "Streak:", "тренировок": "tests",
     "Карта ошибок — клавиатура": "Keyboard error heatmap",
-    "Зелёный — точно, жёлтый — 5%+ ошибок, красный — 20%+; серый — мало данных. Наведите на клавишу.":
-        "Green: accurate; yellow: 5%+ errors; red: 20%+; gray: too little data. Hover over a key.",
+    ("Зелёный — точно, жёлтый — 5%+ ошибок, красный — 20%+; "
+     "серый — мало данных. Наведите на клавишу."):
+        ("Green: accurate; yellow: 5%+ errors; red: 20%+; "
+         "gray: too little data. Hover over a key."),
     "нет": "none", "пока недостаточно данных": "not enough data yet",
     "Завершите тренировку, чтобы увидеть разбор ошибок и ритма.":
         "Complete a test to see error and timing details.",

@@ -1134,7 +1134,8 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         if self.mode is Mode.LESSON:
             opened = self._course_progress()
             if opened:
-                self.result_var.set(self.result_var.get() + self._tr(f"  →  новая буква «{opened}»"))
+                self.result_var.set(self.result_var.get() +
+                                    self._tr(f"  →  новая буква «{opened}»"))
             self._refresh_chips()
             self._refresh_course_keys()
 
@@ -1384,7 +1385,8 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
                        activebackground=theme.ACCENT, activeforeground="#ffffff",
                        selectcolor=theme.ACCENT, font=self.f_hint, borderwidth=0)
         menu.add_command(label=self._tr("Открыть следующую букву  (F4)"), command=self.next_stage)
-        menu.add_command(label=self._tr("Убрать последнюю букву  (Shift+F4)"), command=self.prev_stage)
+        menu.add_command(label=self._tr("Убрать последнюю букву  (Shift+F4)"),
+                         command=self.prev_stage)
         menu.add_separator()
         self._target_choice = tk.IntVar(value=self.course_target_wpm)
         for wpm in TARGET_SPEEDS_WPM:
