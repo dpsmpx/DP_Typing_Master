@@ -482,7 +482,6 @@ class Profile:
         out.sort(key=lambda p: (-p[1], p[0]))
         return out[:limit]
 
-
     def weak_bigrams(self, limit: int = 8) -> list[tuple[str, float]]:
         """Bigram error rates with enough samples to be meaningful."""
         out = []
