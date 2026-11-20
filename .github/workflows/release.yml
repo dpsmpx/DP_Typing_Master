@@ -4,15 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Версия релиза (например 2.2.0). Если пусто — берётся из pyproject.toml"
+        description: "Release version (optional, defaults to pyproject.toml)"
         required: false
         default: ""
       prerelease:
         description: "Pre-release?"
         type: boolean
         default: false
-
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -20,83 +21,110 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: windows-latest
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install PyInstaller
-        run: pip install pyinstaller
-
-      - name: Determine version
-        id: ver
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        id: meta
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            VER="${{ github.event.inputs.version }}"
-          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [[ -n "$INPUT_VERSION" ]]; then
+            VER="$INPUT_VERSION"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VER="${GITHUB_REF#refs/tags/v}"
           else
-            VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+            VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           fi
-          echo "version=$VER" >> $GITHUB_OUTPUT
-          echo "tag=v$VER" >> $GITHUB_OUTPUT
-          echo "Version: $VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
 
-      - name: Build Windows exe
-        shell: bash
-        run: |
-          pyinstaller \
-            --onefile \
-            --windowed \
-            --name "DP_Typing_Master" \
-            --collect-data dp_typing \
-            --noconfirm \
-            --clean \
-            DP_Typing_Master.py
-
-      - name: Check artifact
-        shell: bash
-        run: |
-          ls -la dist/
-          file dist/DP_Typing_Master.exe || true
-          # roughly check size > 5 MB (tkinter + python)
-          SIZE=$(stat -c%s dist/DP_Typing_Master.exe 2>/dev/null || stat -f%z dist/DP_Typing_Master.exe)
-          echo "Size: $SIZE bytes"
-          if [ "$SIZE" -lt 5000000 ]; then
-            echo "Exe looks too small, something went wrong"
-            exit 1
-          fi
-
-      - name: Smoke test Windows executable before publishing
+  package:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: windows
+          - os: ubuntu-24.04
+            platform: linux
+          - os: macos-15
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: python -m pip install pyinstaller
+      - name: Linux GUI prerequisites
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libtk8.6 fonts-dejavu-core
+      - name: Build native GUI application
+        run: python -m PyInstaller --onefile --windowed --name DP_Typing_Master --collect-data dp_typing --noconfirm --clean DP_Typing_Master.py
+      - name: Smoke test Windows exe
+        if: matrix.platform == 'windows'
         run: python tools/smoke_exe.py dist/DP_Typing_Master.exe
+      - name: Smoke test Linux binary
+        if: matrix.platform == 'linux'
+        run: xvfb-run -a python tools/smoke_exe.py dist/DP_Typing_Master
+      - name: Smoke test macOS app bundle
+        if: matrix.platform == 'macos'
+        run: python tools/smoke_exe.py dist/DP_Typing_Master.app/Contents/MacOS/DP_Typing_Master
+      - name: Archive Linux binary
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: tar -czf dist/DP_Typing_Master-linux-x64.tar.gz -C dist DP_Typing_Master
+      - name: Archive macOS application bundle
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: ditto -c -k --sequesterRsrc --keepParent dist/DP_Typing_Master.app dist/DP_Typing_Master-macos.zip
+      - name: Upload Windows
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/DP_Typing_Master.exe
+          if-no-files-found: error
+      - name: Upload Linux
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/DP_Typing_Master-linux-x64.tar.gz
+          if-no-files-found: error
+      - name: Upload macOS
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/DP_Typing_Master-macos.zip
+          if-no-files-found: error
 
-      - name: Create Release
+  publish:
+    needs: [version, package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Create GitHub release from checked native packages
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name: DP Typing Master ${{ steps.ver.outputs.version }}
-          body: |
-            ## Windows
-
-            Скачайте `DP_Typing_Master.exe` — однофайловый исполняемый файл.
-            Никаких зависимостей и установки Python не требуется.
-
-            Запуск: просто двойной клик.
-
-            ---
-            Версия **${{ steps.ver.outputs.version }}**
-            Исходники: https://github.com/dpsmpx/DP_Typing_Master
-          draft: false
-          prerelease: ${{ github.event.inputs.prerelease || false }}
-          files: |
-            dist/DP_Typing_Master.exe
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: DP Typing Master ${{ needs.version.outputs.version }}
+          prerelease: ${{ github.ref == 'refs/heads/main' || contains(needs.version.outputs.version, 'rc') || inputs.prerelease || false }}
+          generate_release_notes: true
+          files: dist/*
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -43,6 +43,12 @@ KEY_HOME_BG = "#232b38"
 KEY_LOCKED_BG = "#13171e"
 KEY_LOCKED_FG = "#353c4a"
 
+# Finger zones: left and right hand are visually distinct, without timers.
+FINGER_ZONE_COLORS = (
+    "#4e324c", "#50402c", "#324c4e", "#32445f",
+    "#305346", "#424664", "#5b4140", "#4d3e5d", "#3c4147",
+)
+
 # ------------------------------------------------------------------ комбо
 
 
@@ -117,3 +123,37 @@ def pick_family(available: set[str], candidates: tuple[str, ...]) -> str:
         if name in available:
             return name
     return candidates[-1]
+
+
+# Theme is chosen before creating the Tk root. Switching themes affects all
+# widgets created for that session, including Canvas elements.
+_PALETTE_KEYS = (
+    "BG", "PANEL", "PANEL_HI", "BORDER", "TEXT", "TEXT_DIM", "TEXT_FAINT",
+    "PENDING", "CORRECT", "WRONG_FG", "WRONG_BG", "CARET", "CARET_DIM",
+    "CARET_BAD", "ACCENT", "GOOD", "WARN", "BAD", "KEY_BG", "KEY_FG",
+    "KEY_NEXT_BG", "KEY_NEXT_FG", "KEY_HOME_BG", "KEY_LOCKED_BG",
+    "KEY_LOCKED_FG", "FINGER_ZONE_COLORS",
+)
+_DARK_PALETTE = {name: globals()[name] for name in _PALETTE_KEYS}
+_LIGHT_PALETTE = {
+    "BG": "#f5f7fb", "PANEL": "#ffffff", "PANEL_HI": "#edf1f7",
+    "BORDER": "#d2dae5", "TEXT": "#1e293b", "TEXT_DIM": "#475569",
+    "TEXT_FAINT": "#76849a", "PENDING": "#64748b", "CORRECT": "#1e293b",
+    "WRONG_FG": "#991b1b", "WRONG_BG": "#fee2e2",
+    "CARET": "#2563eb", "CARET_DIM": "#bfdbfe", "CARET_BAD": "#dc2626",
+    "ACCENT": "#2563eb", "GOOD": "#15803d", "WARN": "#a16207",
+    "BAD": "#dc2626", "KEY_BG": "#e8edf5", "KEY_FG": "#475569",
+    "KEY_NEXT_BG": "#2563eb", "KEY_NEXT_FG": "#ffffff",
+    "KEY_HOME_BG": "#dde6f1", "KEY_LOCKED_BG": "#edf1f6",
+    "KEY_LOCKED_FG": "#a0aabd",
+    "FINGER_ZONE_COLORS": (
+        "#f3ccdb", "#f6e2b9", "#d2ebe7", "#cadcf6",
+        "#d2f1dc", "#dadbf5", "#f4d8d4", "#e7d6f5", "#e3e5eb",
+    ),
+}
+
+
+def activate(light: bool) -> None:
+    """Set the global palette before creating GUI widgets; reversible."""
+    for key, value in (_LIGHT_PALETTE if light else _DARK_PALETTE).items():
+        globals()[key] = value

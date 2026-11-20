@@ -20,6 +20,8 @@ from dp_typing.words import (
 
 RU_ALPHABET = set("абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
 EN_ALPHABET = set("abcdefghijklmnopqrstuvwxyz")
+UK_ALPHABET = set("абвгґдеєжзиіїйклмнопрстуфхцчшщьюя")
+BE_ALPHABET = set("абвгдеёжзійклмнопрстуўфхцчшыьэюя")
 
 
 @pytest.fixture
@@ -27,7 +29,7 @@ def rng():
     return random.Random(1234)
 
 
-@pytest.mark.parametrize("lang", ["ru", "en"])
+@pytest.mark.parametrize("lang", ["ru", "en", "uk", "be"])
 def test_wordlist_loads_and_is_clean(lang):
     words = load_words(lang)
     assert len(words) > 1000
@@ -36,7 +38,10 @@ def test_wordlist_loads_and_is_clean(lang):
     assert len(set(words)) == len(words), "в словаре есть дубликаты"
 
 
-@pytest.mark.parametrize("lang,alphabet", [("ru", RU_ALPHABET), ("en", EN_ALPHABET)])
+@pytest.mark.parametrize("lang,alphabet", [
+    ("ru", RU_ALPHABET), ("en", EN_ALPHABET), ("uk", UK_ALPHABET),
+    ("be", BE_ALPHABET),
+])
 def test_wordlist_covers_whole_alphabet(lang, alphabet):
     """Ревью #8: буква «й» раньше не генерировалась вообще."""
     assert alphabet <= set("".join(load_words(lang)))
@@ -254,3 +259,18 @@ def test_length_titles():
     assert Length("phrase").title == "ФРАЗА"
     assert Length("words", 25).title == "25 СЛОВ"
     assert Length("time", 60).title == "60 С"
+
+
+def test_adaptive_weights_boost_weak_bigrams():
+    from dp_typing.words import adaptive_weights
+
+    words = ["alpha", "abacus", "aba"]
+    weights = adaptive_weights(words, (), weak_bigrams=(("ab", 0.8),))
+    assert weights[1] == weights[2] > weights[0]
+
+
+@pytest.mark.parametrize("lang", ["uk", "be"])
+def test_new_language_starter_corpora_produce_training_text(lang):
+    assert len(load_words(lang)) >= 80
+    sentence = TextSource(lang, Mode.COMMON).phrase(10)
+    assert len(sentence.split()) == 10

@@ -171,3 +171,28 @@ def test_capital_with_shift_held_is_not_caps_lock():
     assert input_problem("ru", "П", "п", SHIFT_MASK) is None
     assert input_problem("ru", "п", "П", CAPS_LOCK_MASK | SHIFT_MASK) == CAPS_LOCK
     assert input_problem("ru", "П", "П", CAPS_LOCK_MASK) is None
+
+
+@pytest.mark.parametrize("variant", ["dvorak", "colemak"])
+def test_alternative_english_layouts_are_complete(variant):
+    layout = LAYOUTS[variant]
+    assert len(layout.letters) == len(set(layout.letters))
+    assert all(stroke_for(variant, ch) is not None for ch in layout.letters)
+    left, right = layout.anchors
+    assert finger_for(variant, left) == LEFT_INDEX
+    assert finger_for(variant, right) == RIGHT_INDEX
+    for plain, shifted in layout.full:
+        assert len(plain) == len(shifted)
+
+
+@pytest.mark.parametrize("lang", ["uk", "be"])
+def test_new_cyrillic_layouts_are_typeable(lang):
+    layout = LAYOUTS[lang]
+    assert len(layout.letters) == len(set(layout.letters))
+    for ch in layout.letters:
+        assert stroke_for(lang, ch) is not None
+    assert finger_for(lang, layout.anchors[0]) == LEFT_INDEX
+    assert finger_for(lang, layout.anchors[1]) == RIGHT_INDEX
+    for plain, shifted in layout.full:
+        assert len(plain) == len(shifted)
+    assert input_problem(lang, "q", layout.home[0]) == WRONG_LAYOUT

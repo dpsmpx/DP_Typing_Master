@@ -480,3 +480,22 @@ def test_finished_timed_test_has_exactly_nothing_left():
     assert s.check_timeout()
     assert s.remaining() == 0.0
     assert s.elapsed() == 0.3
+
+
+def test_bigrams_account_for_typing_errors_and_repeated_samples():
+    p = Profile()
+    for _ in range(5):
+        p.absorb(play("ab", "ax"))
+    assert p.bigram_total["ab"] == 5
+    assert p.bigram_errors["ab"] == 5
+    assert dict(p.weak_bigrams())["ab"] == pytest.approx(1.0)
+
+
+def test_bigrams_in_abandoned_test_are_absorbed_without_test_counter():
+    p = Profile()
+    s = TypingSession("abcd")
+    s.type_char("a")
+    s.type_char("X")
+    p.absorb_keys(s)
+    assert p.tests == 0
+    assert p.bigram_errors["ab"] == 1

@@ -105,6 +105,8 @@ class TypingSession:
         "_clock",
         "_last_at",
         "best_combo",
+        "bigram_errors",
+        "bigram_total",
         "char_errors",
         "char_time",
         "char_time_n",
@@ -160,6 +162,8 @@ class TypingSession:
         # Посимвольная статистика — основа адаптивного подбора слов.
         self.char_total: Counter[str] = Counter()
         self.char_errors: Counter[str] = Counter()
+        self.bigram_total: Counter[str] = Counter()
+        self.bigram_errors: Counter[str] = Counter()
         # Время до верного нажатия по символам: сумма интервалов и их число.
         self.char_time: Counter[str] = Counter()
         self.char_time_n: Counter[str] = Counter()
@@ -197,6 +201,11 @@ class TypingSession:
 
         self.keystrokes += 1
         self.char_total[expected] += 1
+        bigram = self.target[idx - 1:idx + 1] if idx > 0 else ""
+        if len(bigram) == 2:
+            self.bigram_total[bigram] += 1
+            if not correct:
+                self.bigram_errors[bigram] += 1
 
         if correct:
             if gap is not None and gap <= IDLE_GAP:
@@ -366,6 +375,8 @@ class Profile:
 
     __slots__ = (
         "best_combo",
+        "bigram_errors",
+        "bigram_total",
         "char_errors",
         "char_total",
         "key_acc",
@@ -381,6 +392,8 @@ class Profile:
     def __init__(self) -> None:
         self.char_total: Counter[str] = Counter()
         self.char_errors: Counter[str] = Counter()
+        self.bigram_total: Counter[str] = Counter()
+        self.bigram_errors: Counter[str] = Counter()
         self.tests = 0
         self.total_keystrokes = 0
         self.total_errors = 0
@@ -403,6 +416,8 @@ class Profile:
         """
         self.char_total.update(session.char_total)
         self.char_errors.update(session.char_errors)
+        self.bigram_total.update(session.bigram_total)
+        self.bigram_errors.update(session.bigram_errors)
         for ch, n in session.char_time_n.items():
             spent = session.char_time[ch]
             if n and spent > 0 and ch.strip():
@@ -465,4 +480,18 @@ class Profile:
             if rate > 0:
                 out.append((ch, rate))
         out.sort(key=lambda p: (-p[1], p[0]))
+        return out[:limit]
+
+    def weak_bigrams(self, limit: int = 8) -> list[tuple[str, float]]:
+        """Bigram error rates with enough samples to be meaningful."""
+        out = []
+        for pair, total in self.bigram_total.items():
+            if total < MIN_SAMPLES_FOR_WEAKNESS or len(pair) != 2:
+                continue
+            if not pair.strip() or " " in pair:
+                continue
+            rate = self.bigram_errors.get(pair, 0) / total
+            if rate > 0:
+                out.append((pair, rate))
+        out.sort(key=lambda item: (-item[1], item[0]))
         return out[:limit]

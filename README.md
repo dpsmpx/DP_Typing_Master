@@ -1,11 +1,16 @@
 # DP Typing Master
 
-Тренажёр слепой печати для русской и английской раскладки. Без зависимостей —
+Тренажёр слепой печати для русской, английской, украинской и белорусской раскладок. Без зависимостей —
 только Python и tkinter из стандартной библиотеки.
 
 ![Набор фразы: опечатка подсвечена красным, комбо «в потоке», подсказка следующей клавиши](docs/screenshots/02_typing.png)
 
-**Что дальше:** [ROADMAP](ROADMAP.md) · [аудит](docs/AUDIT.md) ·
+**Кандидат 3.0.0rc1:** этапы 2.3–3.0, сборки Windows, Linux и macOS.
+До стабильной версии необходимы реальные испытания: [чек-лист](docs/MANUAL_ACCEPTANCE.md).
+Новые архивы появляются на [странице Releases](https://github.com/dpsmpx/DP_Typing_Master/releases)
+после проверки CI и слияния PR. Версия 2.2.0 ниже остаётся последним стабильным выпуском.
+
+**Что дальше:** [ROADMAP](ROADMAP.md) · [реализация PR #4](docs/ROADMAP_IMPLEMENTATION.md) · [аудит](docs/AUDIT.md) ·
 [исследование аналогов](docs/RESEARCH.md) · [изменения](CHANGELOG.md)
 
 ## Запуск
@@ -17,6 +22,11 @@
 **[DP_Typing_Master.exe](https://github.com/dpsmpx/DP_Typing_Master/releases/download/v2.2.0/DP_Typing_Master.exe)** (≈11 МБ)
 
 Просто запустите — Python ставить не нужно.
+
+### Сборки-кандидаты для Linux и macOS
+
+Исполняемые файлы Linux и macOS доступны на [странице Releases](https://github.com/dpsmpx/DP_Typing_Master/releases)
+в составе предрелизного архива, без установки Python.
 
 ### Из исходников (Linux / macOS / Windows)
 

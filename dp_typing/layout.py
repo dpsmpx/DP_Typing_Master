@@ -90,7 +90,61 @@ JCUKEN = Layout(
     ),
 )
 
-LAYOUTS: dict[str, Layout] = {"en": QWERTY, "ru": JCUKEN}
+
+# Alternative English physical layouts. Text source stays English.
+DVORAK = Layout(
+    code="dvorak", title="Dvorak", top="',.pyfgcrl/",
+    home="aoeuidhtns-", bottom=";qjkxbmwvz",
+    anchors=("u", "h"), accusative="английскую (Dvorak)",
+    full=(
+        (chr(96) + "1234567890[]", "~!@#$%^&*(){}"),
+        ("',.pyfgcrl/=", '"<>PYFGCRL?+'),
+        ("aoeuidhtns-", "AOEUIDHTNS_"),
+        (";qjkxbmwvz", ":QJKXBMWVZ"),
+    ),
+)
+
+COLEMAK = Layout(
+    code="colemak", title="Colemak", top="qwfpgjluy;",
+    home="arstdhneio'", bottom="zxcvbkm,./",
+    anchors=("t", "n"), accusative="английскую (Colemak)",
+    full=(
+        (chr(96) + "1234567890-=", "~!@#$%^&*()_+"),
+        ("qwfpgjluy;[]\\", "QWFPGJLUY:{}|"),
+        ("arstdhneio'", 'ARSTDHNEIO"'),
+        ("zxcvbkm,./", "ZXCVBKM<>?"),
+    ),
+)
+
+UKRAINIAN = Layout(
+    code="uk", title="УКРАЇНСЬКА", top="йцукенгшщзхї",
+    home="фівапролджє", bottom="ячсмитьбю.",
+    anchors=("а", "о"), top_extra="ґ", accusative="українську",
+    full=(
+        ("ґ1234567890-=", 'Ґ!"№;%:?*()_+'),
+        ("йцукенгшщзхї\\", "ЙЦУКЕНГШЩЗХЇ/"),
+        ("фівапролджє", "ФІВАПРОЛДЖЄ"),
+        ("ячсмитьбю.", "ЯЧСМИТЬБЮ,"),
+    ),
+)
+
+BELARUSIAN = Layout(
+    code="be", title="БЕЛАРУСКАЯ", top="йцукенгшўзх'",
+    home="фывапролджэ", bottom="ячсмітьбю.",
+    anchors=("а", "о"), top_extra="ё", accusative="беларускую",
+    full=(
+        ("ё1234567890-=", 'Ё!"№;%:?*()_+'),
+        ("йцукенгшўзх'\\", 'ЙЦУКЕНГШЎЗХ"/'),
+        ("фывапролджэ", "ФЫВАПРОЛДЖЭ"),
+        ("ячсмітьбю.", "ЯЧСМІТЬБЮ,"),
+    ),
+)
+
+LANGUAGES = ("ru", "en", "uk", "be")
+LAYOUTS: dict[str, Layout] = {
+    "en": QWERTY, "ru": JCUKEN, "uk": UKRAINIAN, "be": BELARUSIAN,
+    "dvorak": DVORAK, "colemak": COLEMAK,
+}
 
 #: Какие нажатия засчитываются вместо символа цели. «Ё» в русских текстах
 #: пишут через раз, а на многих клавиатурах она в неудобном углу, поэтому
@@ -98,6 +152,8 @@ LAYOUTS: dict[str, Layout] = {"en": QWERTY, "ru": JCUKEN}
 EQUIVALENTS: dict[str, dict[str, str]] = {
     "ru": {"ё": "е", "Ё": "Е"},
     "en": {},
+    "uk": {},
+    "be": {},
 }
 
 
@@ -226,7 +282,8 @@ def input_problem(lang: str, ch: str, expected: str, state: int = 0) -> str | No
     ``WRONG_LAYOUT``, ``CAPS_LOCK`` или None, если всё в порядке.
     """
     script = alphabet_of(ch)
-    if script is not None and script != lang and alphabet_of(expected) != script:
+    language_script = "en" if lang in ("en", "dvorak", "colemak") else "ru"
+    if script is not None and script != language_script and alphabet_of(expected) != script:
         return WRONG_LAYOUT
     # Бит Lock надёжен не везде, поэтому есть и запасной признак: заглавная
     # пришла без зажатого Shift. Если Shift зажат, заглавная — просто ошибка

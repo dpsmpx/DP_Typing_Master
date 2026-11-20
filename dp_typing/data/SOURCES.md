@@ -2,7 +2,7 @@
 
 `ru_common.txt` и `en_common.txt` — частотная лексика, отобранная из
 [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords)
-(корпус субтитров OpenSubtitles 2018, лицензия MIT).
+(корпус субтитров OpenSubtitles 2018; данные CC BY-SA 4.0, код MIT).
 
 Как получены списки:
 
@@ -16,4 +16,31 @@
    алфавита осталась бы без тренировки.
 
 Оба списка покрывают алфавит целиком: 33 буквы для русского, 26 для
-английского. Лицензия MIT совместима с GPL-3.0 этого проекта.
+английского. Исходный список слов — адаптация данных CC BY-SA 4.0; код генератора MIT.
+Для текста данных сохраняются обязательства атрибуции и ShareAlike.
+
+## Ukrainian frequency-informed dataset (November 2026)
+
+`uk_common.txt` — 1200 уникальных слов, отобранных из
+[FrequencyWords, Ukrainian OpenSubtitles 2018](https://github.com/hermitdave/FrequencyWords/blob/master/content/2018/uk/uk_50k.txt)
+(CC BY-SA 4.0, source: OpenSubtitles 2018). Это *адаптированный* список:
+выбраны 1198 слов из частотного порядка с буквенным фильтром (2–12 букв,
+украинский алфавит, наличие гласной), сравнением с русским частотным списком
+для отсева очевидных русских субтитровых вставок (отношение частот ≥0.08,
+исключая известные общие слова); две дополнительные формы «ґрунт»,
+«ґудзик» обеспечивают тренировку буквы ґ. Фильтрация и ручное дополнение
+нарушают буквальный рейтинг исходного списка; это не выверенный
+лингвистами официальный «топ-1200». Требуется вычитка носителем языка.
+
+## Belarusian frequency-informed dataset (November 2026)
+
+`be_common.txt` — 1200 уникальных слов из [wmkeyboard-data,
+Belarusian frequency word list](https://github.com/wasi-master/wmkeyboard-data/blob/master/data/be/be_full.txt.gz)
+(CC BY-SA 4.0, источник — Leipzig Corpora Collection с обогащением Tatoeba,
+см. upstream `data/README.md`). Из частотного списка отобраны формы
+длиной 2–12 букв только из белорусского алфавита, с гласными; первые
+1200 уникальных подходящих слов сохраняют порядок частотного источника.
+
+Для воспроизведения: `python tools/build_be_corpus.py >
+dp_typing/data/be_common.txt`. Это подборка частотных *словоформ*,
+а не лемматизированный корпус; необходима проверка носителем.

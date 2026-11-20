@@ -1139,3 +1139,180 @@ def test_restored_custom_text_uses_detected_language(tmp_path, monkeypatch):
         assert window.session is not None and window.session.target
     finally:
         window.destroy()
+
+
+def test_finished_session_is_stored_in_sqlite_history(app, tmp_path, monkeypatch):
+    from dp_typing import progress
+
+    monkeypatch.setattr(progress, "database_path", lambda: tmp_path / "history.sqlite3")
+    for char in app.session.target:
+        press(app, char)
+    assert app.session.finished
+    assert len(progress.recent(path=tmp_path / "history.sqlite3")) == 1
+
+
+def test_progress_window_renders_with_empty_history(app, tmp_path, monkeypatch):
+    from dp_typing import progress
+
+    monkeypatch.setattr(progress, "database_path", lambda: tmp_path / "none.sqlite3")
+    import tkinter as tk
+
+    app.open_progress()
+    app.update()
+    windows = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)]
+    assert windows
+    for window in windows:
+        window.destroy()
+
+
+def test_font_size_shortcuts_change_text_size_and_persist(app):
+    from dp_typing import storage
+
+    before = app.f_target.actual("size")
+    app.change_font_size(1)
+    assert app.f_target.actual("size") == before + 1
+    saved = storage.load()
+    assert saved.get("font_delta") == app.font_delta
+    app.change_font_size(-1)
+    assert app.f_target.actual("size") == before
+
+
+def test_finger_zone_colors_toggle_without_touching_training_state(app):
+    from dp_typing import theme
+
+    app._layout_keyboard()
+    start = app.session.target
+    app.toggle_finger_zones()
+    assert app.colored_fingers
+    color, _ = app._key_base("а" if app.lang == "ru" else "f")
+    assert color in theme.FINGER_ZONE_COLORS
+    assert app.session.target == start
+    app.toggle_finger_zones()
+    assert not app.colored_fingers
+
+
+def test_optional_sound_plays_for_key_and_error(app, monkeypatch):
+    from dp_typing import sound
+
+    events = []
+    monkeypatch.setattr(sound, "play", lambda _app, correct: events.append(correct))
+    app.toggle_sound()
+    assert app.sound_enabled
+    press(app, app.session.target[0])
+    press(app, "♜")
+    assert events == [True, False]
+
+
+def test_ghost_marker_is_bounded_and_requires_a_record(app):
+    app.profile.records[app._record_key()] = 60.0
+    app.toggle_ghost()
+    press(app, app.session.target[0])
+    app._update_progress()
+    coords = app.progress.coords(app._ghost_marker)
+    assert len(coords) == 4
+    assert coords[0] >= 0
+    assert coords[2] <= app._progress_w
+
+
+def test_light_theme_choice_persists_without_recoloring_live_widgets(app):
+    from dp_typing import storage
+
+    assert not app.light_theme
+    app.toggle_theme()
+    assert app.light_theme
+    assert storage.load()["light_theme"] is True
+
+
+def test_award_unlock_is_idempotent_and_persisted(app):
+    from dp_typing import awards, storage
+
+    app.profile.tests = 10
+    new = app._unlock_awards(99)
+    assert awards.MILESTONES["ten"] in new
+    assert app._unlock_awards(99) == []
+    app._persist()
+    assert "ten" in storage.load()["awards"]
+
+
+def test_dvorak_keyboard_selection_preserves_english_training(app):
+    from dp_typing.layout import stroke_for
+
+    app.set_keyboard_variant("dvorak")
+    assert app.lang == "en"
+    assert app._keyboard_code() == "dvorak"
+    assert stroke_for("dvorak", "a") is not None
+    assert app.session.target
+    app.set_keyboard_variant("colemak")
+    assert app._keyboard_code() == "colemak"
+
+
+def test_ukrainian_and_belarusian_language_cycle(app):
+    initial = app.lang
+    for _ in range(4):
+        app.toggle_language()
+        assert app.session is not None and app.session.target
+    assert app.lang == initial
+
+
+def test_alt_or_command_shortcut_is_not_counted_as_typing(app):
+    for modifier in (0x8, 0x10, 0x4):
+        app._on_key(type("Event", (), {
+            "char": "q", "keysym": "q", "state": modifier,
+        })())
+    assert app.session.keystrokes == 0
+
+
+def test_altgr_printable_character_is_counted(app):
+    app._on_key(type("Event", (), {
+        "char": "а", "keysym": "a", "state": 0x4 | 0x8,
+    })())
+    assert app.session.keystrokes == 1
+
+
+def test_error_heatmap_is_visible_on_main_keyboard(app):
+    from dp_typing import theme
+
+    target_key = "а" if app.lang == "ru" else "f"
+    app.profile.char_total[target_key] = 10
+    app.profile.char_errors[target_key] = 3
+    app.toggle_error_heatmap()
+    assert app.error_heatmap
+    assert app._key_base(target_key)[0] == theme.BAD
+    app.profile.char_errors[target_key] = 0
+    assert app._key_base(target_key)[0] == theme.GOOD
+    app.toggle_error_heatmap()
+    assert not app.error_heatmap
+
+
+def test_english_ui_and_light_theme_start_with_saved_preferences(tmp_path, monkeypatch):
+    """Load both settings through the real Tk initializer, not only pure helpers."""
+    import json
+
+    from dp_typing import app as app_module
+    from dp_typing import storage, theme
+
+    profile_file = tmp_path / "profile.json"
+    profile_file.write_text(json.dumps({
+        "schema": 2, "lang": "en", "mode": "common",
+        "ui_language": "en", "light_theme": True,
+    }), encoding="utf-8")
+    monkeypatch.setattr(storage, "config_path", lambda: profile_file)
+    try:
+        window = _make_window(app_module)
+        try:
+            assert window.ui_language == "en"
+            assert window.light_theme
+            assert "ENGLISH" in window.lang_var.get()
+            assert theme.BG == "#f5f7fb"
+            assert window._tile_parts[0][1].cget("text") == "WPM"
+            assert window.combo_canvas.itemcget(window._combo_caption, "text") == "COMBO"
+            assert any(
+                window._menu.entrycget(i, "label") == "Training"
+                for i in range(window._menu.index("end") + 1)
+                if window._menu.type(i) == "cascade"
+            )
+            assert window.session.target
+        finally:
+            window.destroy()
+    finally:
+        theme.activate(False)

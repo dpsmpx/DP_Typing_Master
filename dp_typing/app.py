@@ -20,15 +20,16 @@
 
 from __future__ import annotations
 
-import math
 import random
+import sys
 import time
 import tkinter as tk
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
-from . import __version__, theme
+from . import __version__, awards, i18n, progress, progress_view, sound, theme
+from .combo_ui import ComboMixin
 from .course import (
     DEFAULT_TARGET_WPM,
     MIN_SAMPLES,
@@ -44,15 +45,17 @@ from .course import (
 from .customtext import CustomText, CustomTextError, sample
 from .engine import Mark, Profile, TypingSession
 from .fmt import count, wrap_words
+from .keyboard_ui import KeyboardMixin
 from .layout import (
     CAPS_LOCK,
     EQUIVALENTS,
-    FINGER_NAMES,
+    LANGUAGES,
     LAYOUTS,
     WRONG_LAYOUT,
+    finger_for,
     input_problem,
-    stroke_for,
 )
+from .stats_ui import StatsMixin
 from .storage import load as load_profile
 from .storage import load_custom_text, save_custom_text
 from .storage import restore as restore_profile
@@ -148,8 +151,15 @@ def _lerp_hex(a: str, b: str, t: float) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-class TypingApp(tk.Tk):
+class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
     def __init__(self) -> None:
+        saved = load_profile()
+        theme.activate(bool(saved.get("light_theme", False)))
+        NOTICE_COLORS.update({
+            "warn": (theme.WARN, theme.BG),
+            "danger": (theme.BAD, theme.BG),
+            "info": (theme.ACCENT, "#ffffff"),
+        })
         super().__init__()
         self.scale = self._detect_scale()
         self._normal = NORMAL.scaled(self.scale)
@@ -165,12 +175,12 @@ class TypingApp(tk.Tk):
         # ---- состояние
         self.rng = random.Random()
         self.profile = Profile()
-        saved = load_profile()
         restore_profile(self.profile, saved)
+        progress.migrate_legacy(self.profile)
         saved_lang = saved.get("lang")
         # A manually edited or damaged JSON profile can contain unhashable values.
         self.lang: str = (
-            saved_lang if isinstance(saved_lang, str) and saved_lang in LAYOUTS else "ru"
+            saved_lang if isinstance(saved_lang, str) and saved_lang in LANGUAGES else "ru"
         )
         try:
             self.mode = Mode(saved.get("mode", Mode.COMMON.value))
@@ -178,12 +188,29 @@ class TypingApp(tk.Tk):
             self.mode = Mode.COMMON
         # Курс: сколько букв открыто в каждом языке и целевая скорость.
         course = saved.get("course") if isinstance(saved.get("course"), dict) else {}
-        self.course = {lang: clamp_unlocked(lang, course.get(lang)) for lang in LAYOUTS}
+        self.course = {lang: clamp_unlocked(lang, course.get(lang))
+                       for lang in LANGUAGES}
         wpm = saved.get("course_target_wpm")
         self.course_target_wpm = wpm if wpm in TARGET_SPEEDS_WPM else DEFAULT_TARGET_WPM
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
+        variant = saved.get("keyboard_variant")
+        self.keyboard_variant = variant if variant in ("dvorak", "colemak") else "en"
+        self.colored_fingers = bool(saved.get("colored_fingers", False))
+        self.error_heatmap = bool(saved.get("error_heatmap", False))
+        self.sound_enabled = bool(saved.get("sound_enabled", False))
+        self.ghost_enabled = bool(saved.get("ghost_enabled", False))
+        self.light_theme = bool(saved.get("light_theme", False))
+        self.ui_language = "en" if saved.get("ui_language") == "en" else "ru"
+        stored_awards = saved.get("awards", [])
+        self.achievements = (
+            set(stored_awards) & awards.MILESTONES.keys()
+            if isinstance(stored_awards, list)
+            and all(isinstance(item, str) for item in stored_awards) else set()
+        )
         self.length = Length.parse(saved.get("length"))
+        size = saved.get("font_delta", 0)
+        self.font_delta = max(-6, min(8, size)) if type(size) is int else 0
         self.options = TextOptions(caps=bool(saved.get("caps", False)),
                                    punct=bool(saved.get("punct", False)),
                                    digits=bool(saved.get("digits", False)))
@@ -250,6 +277,9 @@ class TypingApp(tk.Tk):
 
         self._build_fonts()
         self._build_ui()
+        self._build_menu()
+        self._localize_widgets(self)
+        self._localize_menu(self._menu)
         self._bind_keys()
 
         self.protocol("WM_DELETE_WINDOW", self._quit)
@@ -291,9 +321,11 @@ class TypingApp(tk.Tk):
         mono = theme.pick_family(available, theme.MONO_FAMILIES)
         ui = theme.pick_family(available, theme.UI_FAMILIES)
         d = self.density
-        self.f_target = tkfont.Font(family=mono, size=d.target)
+        self.f_target = tkfont.Font(family=mono, size=d.target + self.font_delta)
         # Для оценки «влезет ли обычная плотность» без переключения шрифтов.
-        self._f_target_normal = tkfont.Font(family=mono, size=NORMAL.target)
+        self._f_target_normal = tkfont.Font(
+            family=mono, size=NORMAL.target + self.font_delta
+        )
         self.f_stat = tkfont.Font(family=ui, size=d.stat, weight="bold")
         self.f_caption = tkfont.Font(family=ui, size=9)
         self.f_chip = tkfont.Font(family=ui, size=10, weight="bold")
@@ -328,6 +360,11 @@ class TypingApp(tk.Tk):
 
         tk.Label(bar, text="DP TYPING MASTER", bg=theme.BG, fg=theme.TEXT,
                  font=self.f_chip).pack(side="left")
+        progress_link = tk.Label(bar, text="ПРОГРЕСС  ▸", bg=theme.PANEL,
+                                 fg=theme.ACCENT, font=self.f_chip,
+                                 padx=self.px(10), pady=self.px(4), cursor="hand2")
+        progress_link.pack(side="right")
+        progress_link.bind("<Button-1>", lambda _e: self.open_progress())
 
         chips = tk.Frame(bar, bg=theme.BG)
         chips.pack(side="left", padx=(self.px(18), 0))
@@ -426,6 +463,9 @@ class TypingApp(tk.Tk):
         self._progress_bar = self.progress.create_rectangle(
             0, 0, 0, bar_h, fill=theme.ACCENT, width=0
         )
+        self._ghost_marker = self.progress.create_rectangle(
+            0, 0, 0, 0, fill=theme.WARN, width=0
+        )
         self.progress.bind("<Configure>", self._on_progress_configure)
 
     def _build_text(self, parent: tk.Frame) -> None:
@@ -478,7 +518,7 @@ class TypingApp(tk.Tk):
         c = self.combo_canvas
         self._combo_value = c.create_text(0, 0, text="0", fill=theme.TEXT_FAINT,
                                           font=self.f_combo, anchor="center")
-        self._combo_caption = c.create_text(0, 0, text="КОМБО", fill=theme.TEXT_FAINT,
+        self._combo_caption = c.create_text(0, 0, text=self._tr("КОМБО"), fill=theme.TEXT_FAINT,
                                             font=self.f_caption, anchor="center")
         self._combo_bar_bg = c.create_rectangle(0, 0, 0, 0, fill=theme.PANEL, width=0)
         self._combo_bar = c.create_rectangle(0, 0, 0, 0, fill=theme.TEXT_FAINT, width=0)
@@ -508,6 +548,66 @@ class TypingApp(tk.Tk):
         self.kb_holder.pack(fill="x", pady=(self.density.gap // 2, 0),
                             before=self.footer_label)
 
+    def _build_menu(self) -> None:
+        """Mouse-accessible alternatives to function keys on laptops."""
+        menu = tk.Menu(self)
+        training = tk.Menu(menu, tearoff=0)
+        for label, callback in (
+            ("Заново  ·  Tab", self.restart_test),
+            ("Следующая фраза  ·  Esc", self.skip_test),
+            ("Язык  ·  Ctrl+1", self.toggle_language),
+            ("Режим  ·  Ctrl+2", self.cycle_mode),
+            ("Курс: следующая буква  ·  F4", self.next_stage),
+            ("Строгий режим  ·  Ctrl+3", self.toggle_strict),
+            ("Клавиатура  ·  Ctrl+4", self.toggle_keyboard),
+        ):
+            training.add_command(label=label, command=callback)
+        menu.add_cascade(label="Тренировка", menu=training)
+        settings = tk.Menu(menu, tearoff=0)
+        settings.add_command(label="Размер шрифта +  ·  Ctrl++",
+                             command=lambda: self.change_font_size(1))
+        settings.add_command(label="Размер шрифта −  ·  Ctrl+-",
+                             command=lambda: self.change_font_size(-1))
+        settings.add_command(label="Заглавные  ·  F9", command=self.toggle_caps)
+        settings.add_command(label="Пунктуация  ·  F10", command=self.toggle_punct)
+        settings.add_command(label="Цифры  ·  F11", command=self.toggle_digits)
+        settings.add_command(label="Цветные зоны пальцев",
+                             command=self.toggle_finger_zones)
+        settings.add_command(label="Карта ошибок на клавиатуре",
+                             command=self.toggle_error_heatmap)
+        settings.add_command(label="Звук нажатий и ошибок",
+                             command=self.toggle_sound)
+        settings.add_command(label="Каретка темпа рекорда",
+                             command=self.toggle_ghost)
+        settings.add_command(label="Светлая / тёмная тема (после перезапуска)",
+                             command=self.toggle_theme)
+        settings.add_command(label="English / Русский UI (после перезапуска)",
+                             command=self.toggle_ui_language)
+        variants = tk.Menu(menu, tearoff=0)
+        self._variant_choice = tk.StringVar(value=self.keyboard_variant)
+        for value, name in (("en", "QWERTY"), ("dvorak", "Dvorak"),
+                            ("colemak", "Colemak")):
+            variants.add_radiobutton(label=name, variable=self._variant_choice,
+                                     value=value,
+                                     command=lambda v=value: self.set_keyboard_variant(v))
+        menu.add_cascade(label="Раскладка EN", menu=variants)
+        menu.add_cascade(label="Настройки", menu=settings)
+        menu.add_command(label="Прогресс  ·  Ctrl+P", command=self.open_progress)
+        menu.add_command(label="Справка  ·  F1", command=self.toggle_help)
+        self.configure(menu=menu)
+        self._menu = menu
+
+    def change_font_size(self, change: int) -> None:
+        """Enlarge the typing text without affecting the keyboard fit budget."""
+        size = max(-6, min(8, self.font_delta + change))
+        if size == self.font_delta:
+            return
+        self.font_delta = size
+        self._apply_density()
+        self._rerender()
+        self._check_fit()
+        self._persist()
+
     def _build_help(self) -> None:
         self.help_frame = tk.Frame(self, bg=theme.PANEL_HI, highlightthickness=1,
                                    highlightbackground=theme.BORDER)
@@ -525,6 +625,9 @@ class TypingApp(tk.Tk):
             ("F9 / F10 / F11", "заглавные / знаки препинания / цифры"),
             ("F1", "закрыть эту справку"),
             ("Ctrl+O", "открыть свой текст (.txt) и печатать его кусками"),
+            ("Ctrl+P", "прогресс, график, карта ошибок и дневная цель"),
+            ("Ctrl+1 / 2 / 3 / 4", "язык / режим / строго / клавиатура"),
+            ("Ctrl++ / Ctrl+-", "увеличить / уменьшить текст"),
             ("Ctrl+Q", "выход"),
         )
         tk.Label(self.help_frame, text="Горячие клавиши", bg=theme.PANEL_HI,
@@ -551,7 +654,8 @@ class TypingApp(tk.Tk):
         """Применить размеры текущей плотности ко всем секциям."""
         d = self.density
         gap = d.gap
-        self.f_target.configure(size=d.target)
+        self.f_target.configure(size=d.target + self.font_delta)
+        self._f_target_normal.configure(size=NORMAL.target + self.font_delta)
         self.f_stat.configure(size=d.stat)
         self.f_combo.configure(size=d.combo)
         self.f_combo_big.configure(size=d.combo_big)
@@ -712,12 +816,28 @@ class TypingApp(tk.Tk):
         self.bind("<F9>", lambda _e: self._action(self.toggle_caps))
         self.bind("<F10>", lambda _e: self._action(self.toggle_punct))
         self.bind("<F11>", lambda _e: self._action(self.toggle_digits))
+        for keysym in ("equal", "plus", "KP_Add"):
+            self.bind(f"<Control-{keysym}>",
+                      lambda _e: self._action(lambda: self.change_font_size(1)))
+        for keysym in ("minus", "KP_Subtract"):
+            self.bind(f"<Control-{keysym}>",
+                      lambda _e: self._action(lambda: self.change_font_size(-1)))
+        self.bind("<Control-1>", lambda _e: self._action(self.toggle_language))
+        self.bind("<Control-2>", lambda _e: self._action(self.cycle_mode))
+        self.bind("<Control-3>", lambda _e: self._action(self.toggle_strict))
+        self.bind("<Control-4>", lambda _e: self._action(self.toggle_keyboard))
         # Сочетания с Ctrl — и на кириллической раскладке: там у клавиши Q
         # символ «й», и привязка к <Control-q> просто не срабатывала.
         for key in ("q", "Q", "Cyrillic_shorti", "Cyrillic_SHORTI"):
             self.bind(f"<Control-{key}>", lambda _e: self._quit())
         for key in ("o", "O", "Cyrillic_shcha", "Cyrillic_SHCHA"):
             self.bind(f"<Control-{key}>", lambda _e: self._action(self.open_custom_text))
+        for key in ("p", "P", "Cyrillic_ze", "Cyrillic_ZE"):
+            self.bind(f"<Control-{key}>", lambda _e: self._action(self.open_progress))
+        if sys.platform == "darwin":
+            self.bind("<Command-q>", lambda _e: self._quit())
+            self.bind("<Command-o>", lambda _e: self._action(self.open_custom_text))
+            self.bind("<Command-p>", lambda _e: self._action(self.open_progress))
 
     @staticmethod
     def _action(fn) -> str:
@@ -741,7 +861,12 @@ class TypingApp(tk.Tk):
         self.new_test()
 
     def _on_key(self, event: tk.Event) -> str | None:
-        if event.state & 0x4:  # Control — это команда, а не символ
+        # Ctrl, Alt and Command are application/system shortcuts, not typing.
+        # On Windows AltGr is Ctrl+Alt: accept the resulting printable symbol.
+        state = event.state
+        ctrl, alt, command = bool(state & 0x4), bool(state & 0x8), bool(state & 0x10)
+        altgr = ctrl and alt and len(event.char) == 1 and event.char.isprintable()
+        if (ctrl or alt or command) and not altgr:
             return None
         if self.help_open:
             return "break"     # справка модальна: печать в тест не уходит
@@ -796,8 +921,9 @@ class TypingApp(tk.Tk):
             self._custom_chunk = self._custom_source().chunk(self.length)
             self._start_session(self._custom_chunk)
             return
-        self._start_session(self.source.phrase(self.length.word_count(),
-                                               self.profile.weak_chars()))
+        self._start_session(self.source.phrase(
+            self.length.word_count(), self.profile.weak_chars(), self.profile.weak_bigrams()
+        ))
 
     def restart_test(self) -> None:
         """Та же фраза заново — полезно, чтобы отработать сложное место."""
@@ -949,6 +1075,8 @@ class TypingApp(tk.Tk):
         if not effect.accepted or self.session is None:
             return
         session = self.session
+        if effect.changed and self.sound_enabled:
+            sound.play(self, effect.correct)
 
         # Перекрашиваем только изменившиеся позиции.
         for idx in effect.changed:
@@ -987,6 +1115,8 @@ class TypingApp(tk.Tk):
             return
         metrics = session.metrics()
         new_record = self.profile.absorb(session, self._record_key())
+        self._refresh_course_keys()
+        progress.record(self.lang, self.mode.value, metrics)
         self._refresh_stats(force=True)
 
         parts = [f"{metrics.wpm:.0f} слов/мин", f"{metrics.accuracy:.0f}% точности"]
@@ -999,28 +1129,38 @@ class TypingApp(tk.Tk):
         self.result_label.configure(
             fg=theme.accuracy_color(metrics.accuracy) if metrics.errors else theme.GOOD
         )
-        self.result_var.set("  ·  ".join(parts))
+        self.result_var.set(self._tr("  ·  ".join(parts)))
 
         if self.mode is Mode.LESSON:
             opened = self._course_progress()
             if opened:
-                self.result_var.set(self.result_var.get() + f"  →  новая буква «{opened}»")
+                self.result_var.set(self.result_var.get() +
+                                    self._tr(f"  →  новая буква «{opened}»"))
             self._refresh_chips()
             self._refresh_course_keys()
 
         if self.mode is Mode.CUSTOM:
             self._advance_custom(session.pos, finished=not session.timed_out)
 
+        newly_earned = self._unlock_awards(metrics.accuracy)
+        if newly_earned:
+            self.result_var.set(self.result_var.get() + "  ·  " + ", ".join(newly_earned))
         self._refresh_session_line()
         self._refresh_hint()
         self._persist()
+
+    def _unlock_awards(self, accuracy: float) -> list[str]:
+        all_earned = awards.earned(self.profile.tests, self.profile.best_combo, accuracy)
+        new = sorted(all_earned - self.achievements)
+        self.achievements.update(new)
+        return [awards.MILESTONES[item] for item in new]
 
     # ------------------------------------------------------------ свой текст
 
     def _restore_custom(self, saved: dict) -> CustomText | None:
         text = load_custom_text()
         lang = saved.get("custom_lang")
-        if not text or not isinstance(lang, str) or lang not in LAYOUTS:
+        if not text or not isinstance(lang, str) or lang not in LANGUAGES:
             return None
         title = saved.get("custom_title")
         try:
@@ -1137,6 +1277,7 @@ class TypingApp(tk.Tk):
     def _show_notice(self, text: str, kind: str = "info", timeout_ms: int = INFO_NOTICE_MS,
                      *, source: str | None = None) -> None:
         """Показать плашку поверх низа панели с фразой; сама скроется."""
+        text = self._tr(text)
         style = (text, kind)
         if style != self._notice_style:
             bg, fg = NOTICE_COLORS[kind]
@@ -1172,295 +1313,6 @@ class TypingApp(tk.Tk):
             self.result_var.set(text)
             self.result_label.configure(fg=color)
 
-    # ---------------------------------------------------------------- метрики
-
-    def _refresh_stats(self, force: bool = False) -> None:
-        session = self.session
-        if session is None:
-            return
-        m = session.metrics()
-        values = {
-            "wpm": f"{m.wpm:.0f}",
-            "cpm": f"{m.cpm:.0f}",
-            "acc": f"{m.accuracy:.0f}%",
-            "err": str(m.errors),
-            "best": f"{self.profile.record(self._record_key()):.0f}",
-        }
-        colors = {
-            "acc": theme.accuracy_color(m.accuracy),
-            "err": theme.BAD if m.errors else theme.TEXT,
-        }
-        remaining = session.remaining()
-        if remaining is not None:
-            values["extra"] = str(math.ceil(remaining))
-            if remaining <= 5 and session.started and not session.finished:
-                colors["extra"] = theme.WARN
-        elif self.length.kind == "words":
-            target = session.target
-            done = len(target.split()) if session.finished else target.count(" ", 0, session.pos)
-            values["extra"] = f"{done}/{len(target.split())}"
-        for key, text in values.items():
-            color = colors.get(key, theme.TEXT)
-            cached = self._stat_cache.get(key)
-            if force or cached != (text, color):
-                # .configure — самая дорогая операция здесь, поэтому она
-                # выполняется только когда значение реально изменилось.
-                self.stat_vars[key].set(text)
-                self.stat_labels[key].configure(fg=color)
-                self._stat_cache[key] = (text, color)
-
-        self._update_progress()
-
-    def _on_progress_configure(self, event: tk.Event) -> None:
-        self._progress_w = event.width
-        self._update_progress()
-
-    def _update_progress(self) -> None:
-        """Самый горячий путь: одно перемещение прямоугольника."""
-        session = self.session
-        if self._progress_w > 1 and session is not None:
-            filled = self._progress_w * session.pos / len(session.target)
-            self.progress.coords(self._progress_bar, 0, 0, filled, self.px(3))
-
-    def _refresh_session_line(self) -> None:
-        p = self.profile
-        if p.tests == 0:
-            self.session_var.set("")
-            return
-        self.session_var.set(
-            f"Всего: {count(p.tests, 'тест', 'теста', 'тестов')} · {p.wpm:.0f} слов/мин · "
-            f"{p.accuracy:.0f}% · лучшее комбо ×{p.best_combo}"
-        )
-
-    # ------------------------------------------------------------------ комбо
-
-    def _fade(self, flash: str, base: str) -> tuple[str, ...]:
-        """Градиент вспышки, посчитанный один раз на пару цветов."""
-        key = (flash, base)
-        ramp = self._fade_cache.get(key)
-        if ramp is None:
-            ramp = tuple(
-                _lerp_hex(flash, base, i / (ANIM_FRAMES - 1)) for i in range(ANIM_FRAMES)
-            )
-            self._fade_cache[key] = ramp
-        return ramp
-
-    def _on_combo_configure(self, event: tk.Event) -> None:
-        self._combo_w = event.width
-        self._combo_h = event.height
-        self._combo_tier = None          # заставить пересобрать геометрию
-        self._combo_bar_right = -1
-        self._draw_combo()
-
-    def _combo_rows(self) -> tuple[int, int, int]:
-        """Вертикальные позиции: число, подпись, полоска (под высоту холста)."""
-        h = self._combo_h
-        return round(h * 0.35), round(h * 0.68), h - self.px(10)
-
-    def _draw_combo(self, pulse: bool = False) -> None:
-        width = self._combo_w
-        if width <= 1:
-            return
-        session = self.session
-        combo = session.combo if session else 0
-        tier = theme.combo_tier(combo)
-        c = self.combo_canvas
-        mid = width // 2
-        value_y, caption_y, bar_y = self._combo_rows()
-        bar_h = self.px(3)
-        bar_w = min(self.px(320), width - self.px(80))
-        left = mid - bar_w // 2
-
-        # Тяжёлая часть — подписи и позиции — трогается только когда сменился
-        # уровень комбо или размер окна, а не на каждое нажатие.
-        if tier is not self._combo_tier:
-            self._combo_tier = tier
-            c.coords(self._combo_value, mid, value_y)
-            c.coords(self._combo_caption, mid, caption_y)
-            caption = f"КОМБО · {tier.name.upper()}" if tier.name else "КОМБО"
-            c.itemconfigure(self._combo_caption, text=caption, fill=tier.color)
-            c.itemconfigure(self._combo_bar, fill=tier.color)
-            c.coords(self._combo_bar_bg, left, bar_y, left + bar_w, bar_y + bar_h)
-
-        c.itemconfigure(self._combo_value, text=f"×{combo}" if combo else "—")
-
-        nxt = theme.next_threshold(combo)
-        filled = 1.0 if nxt is None else (combo - tier.threshold) / max(nxt - tier.threshold, 1)
-        right = round(left + bar_w * filled)
-        if right != self._combo_bar_right:      # меньше пикселя — не дёргаем Tk
-            self._combo_bar_right = right
-            c.coords(self._combo_bar, left, bar_y, right, bar_y + bar_h)
-
-        if pulse:
-            self._pulse_combo(tier)
-        else:
-            c.itemconfigure(self._combo_value, fill=tier.color, font=self.f_combo)
-
-    def _pulse_combo(self, tier) -> None:
-        """Запустить (или перезапустить) вспышку. В очереди всегда ≤ 1 кадр.
-
-        Смена шрифта заставляет Tk заново обмерять текст, поэтому «подскок»
-        размера делается только при переходе на новый уровень; обычное
-        нажатие обходится сменой одного цвета.
-        """
-        self._anim_ramp = self._fade(tier.flash, tier.color)
-        self._anim_frame = 0
-        if tier is not self._pulsed_tier:
-            self._pulsed_tier = tier
-            self.combo_canvas.itemconfigure(self._combo_value, fill=tier.flash,
-                                            font=self.f_combo_big)
-        else:
-            self.combo_canvas.itemconfigure(self._combo_value, fill=tier.flash)
-        if self._anim_id is None:
-            self._anim_id = self.after(ANIM_STEP_MS, self._anim_tick)
-
-    def _anim_tick(self) -> None:
-        self._anim_id = None
-        self._anim_frame += 1
-        if self._anim_frame >= ANIM_FRAMES:
-            self.combo_canvas.itemconfigure(self._combo_value, font=self.f_combo)
-            return  # цепочка закончилась, очередь пуста
-        if self._anim_frame == 2:
-            self.combo_canvas.itemconfigure(self._combo_value,
-                                            fill=self._anim_ramp[2], font=self.f_combo)
-        else:
-            self.combo_canvas.itemconfigure(self._combo_value,
-                                            fill=self._anim_ramp[self._anim_frame])
-        self._anim_id = self.after(ANIM_STEP_MS, self._anim_tick)
-
-    # ------------------------------------------------------- клавиатура-подсказка
-
-    def _on_kb_configure(self, event: tk.Event) -> None:
-        # Высота тоже важна: в компактной плотности холст ниже, и клавиши,
-        # посчитанные под старую высоту, вылезали бы за его край.
-        size = (event.width, event.height)
-        if size == self._kb_size:
-            return
-        self._kb_size = size
-        if self._resize_id is not None:
-            self.after_cancel(self._resize_id)
-        self._resize_id = self.after(120, self._layout_keyboard)
-
-    @property
-    def _kb_full(self) -> bool:
-        """Полная клавиатура (ряд цифр, знаки, Shift) — когда текст их требует."""
-        return self.source.decorates or self.mode is Mode.CUSTOM
-
-    def _kb_height(self) -> int:
-        d = self.density
-        return d.kb_h + (d.kb_extra if self._kb_full else 0)
-
-    def _keyboard_rows(self) -> list[list[tuple[str, str, float, str]]]:
-        """Ряды клавиш: (имя, подпись, ширина в клавишах, мелкая подпись Shift)."""
-        layout = LAYOUTS[self.lang]
-        rows: list[list[tuple[str, str, float, str]]]
-        if not self._kb_full:
-            rows = [[(ch, ch.upper(), 1.0, "") for ch in row] for row in layout.display_rows]
-        else:
-            rows = []
-            for plain, shifted in layout.full:
-                # У букв «что под Shift» очевидно, подписываем только знаки.
-                rows.append([(base, base.upper(), 1.0, "" if up == base.upper() else up)
-                             for base, up in zip(plain, shifted)])
-            rows[-1] = [("shift_left", "SHIFT", SHIFT_UNITS, ""), *rows[-1],
-                        ("shift_right", "SHIFT", SHIFT_UNITS, "")]
-        rows.append([(" ", "ПРОБЕЛ", SPACE_UNITS, "")])
-        return rows
-
-    def _layout_keyboard(self) -> None:
-        """Пересобрать клавиши. Вызывается только при смене размера, языка
-        или состава клавиатуры (опции текста)."""
-        self._resize_id = None
-        c = self.kb_canvas
-        c.delete("all")
-        self._kb_items.clear()
-        self._kb_small.clear()
-        self._hot_key = self._hot_shift = None
-        self._kb_full_drawn = self._kb_full
-
-        rows = self._keyboard_rows()
-        width, height = c.winfo_width(), c.winfo_height()
-        if width <= 1 or height <= 1:
-            return
-        gap = self.px(4)
-        # Ширина «обычной» клавиши — по самому широкому ряду.
-        kw = min(
-            (width - self.px(40) - gap * (len(row) - 1)) / sum(u for _, _, u, _ in row)
-            for row in rows
-        )
-        kw = min(self.px(46), kw)
-        # Все ряды обязаны уместиться по высоте: раньше высота клавиш считалась
-        # только от ширины, и в низком окне верхний ряд уходил за край холста.
-        kh = min(self.px(34), kw, (height - (len(rows) - 1) * gap - self.px(2)) / len(rows))
-        if kw < self.px(12) or kh < self.px(10):
-            return
-        top = max((height - (kh * len(rows) + gap * (len(rows) - 1))) / 2, 0)
-        small_labels = kh >= self.px(24)
-        # В сжатой клавиатуре (пять рядов в маленьком окне) подпись обычным
-        # кеглем выше самой клавиши — берём мелкий.
-        label_font = self.f_key if kh >= self.px(19) else self.f_key_small
-
-        for r, row in enumerate(rows):
-            widths = [u * kw + (u - 1) * gap for _, _, u, _ in row]
-            x = (width - sum(widths) - gap * (len(row) - 1)) / 2
-            y = top + r * (kh + gap)
-            for (name, text, _, small), w in zip(row, widths):
-                base_bg, base_fg = self._key_base(name)
-                rect = c.create_rectangle(x, y, x + w, y + kh, fill=base_bg, width=0)
-                label = c.create_text(x + w / 2, y + kh / 2, text=text,
-                                      fill=base_fg, font=label_font)
-                self._kb_items[name] = (rect, label)
-                if small and small_labels:
-                    self._kb_small[name] = c.create_text(
-                        x + self.px(3), y + self.px(1), text=small, anchor="nw",
-                        fill=theme.TEXT_FAINT, font=self.f_key_small)
-                x += w + gap
-        self._update_next_key()
-        self._refresh_course_keys()
-
-    def _paint_key(self, name: str | None, hot: bool) -> None:
-        if name is None or name not in self._kb_items:
-            return
-        rect, label = self._kb_items[name]
-        if hot:
-            bg, fg, small = theme.KEY_NEXT_BG, theme.KEY_NEXT_FG, theme.KEY_NEXT_FG
-        else:
-            bg, fg = self._key_base(name)
-            small = theme.TEXT_FAINT
-        self.kb_canvas.itemconfigure(rect, fill=bg)
-        self.kb_canvas.itemconfigure(label, fill=fg)
-        if name in self._kb_small:
-            self.kb_canvas.itemconfigure(self._kb_small[name], fill=small)
-
-    def _update_next_key(self) -> None:
-        """Подсветить следующую клавишу (и Shift другой рукой, если нужен)."""
-        if not self.show_keyboard or not self._kb_items:
-            return
-        session = self.session
-        ch = None
-        if session and not session.finished and session.pos < len(session.target):
-            ch = session.target[session.pos]
-        stroke = stroke_for(self.lang, ch) if ch else None
-        key = stroke.key if stroke else (ch.lower() if ch else None)
-        shift = f"shift_{stroke.shift_side}" if stroke and stroke.shift_side else None
-
-        if (key, shift) == (self._hot_key, self._hot_shift):
-            return
-        self._paint_key(self._hot_key, False)
-        self._paint_key(self._hot_shift, False)
-        self._hot_key, self._hot_shift = key, shift
-        self._paint_key(key, True)
-        self._paint_key(shift, True)
-
-        hint = FINGER_NAMES[stroke.finger] if stroke else ""
-        if stroke and stroke.shift_side:
-            hand = "правой" if stroke.shift_side == "right" else "левой"
-            hint += f" + Shift {hand} рукой"
-        alternative = EQUIVALENTS[self.lang].get(ch) if ch else None
-        if hint and alternative:
-            hint += f" · можно и «{alternative}»"
-        self.finger_var.set(hint)
-
     # ---------------------------------------------------------------- команды
 
     def toggle_language(self) -> None:
@@ -1468,7 +1320,7 @@ class TypingApp(tk.Tk):
             # Язык задаёт сам текст: на другой раскладке его не набрать.
             self._show_notice("Язык задаёт открытый текст — Ctrl+O откроет другой")
             return
-        self.lang = "en" if self.lang == "ru" else "ru"
+        self.lang = LANGUAGES[(LANGUAGES.index(self.lang) + 1) % len(LANGUAGES)]
         self._refresh_chips()
         self._layout_keyboard()
         self.new_test()
@@ -1532,12 +1384,13 @@ class TypingApp(tk.Tk):
         menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_HI, fg=theme.TEXT,
                        activebackground=theme.ACCENT, activeforeground="#ffffff",
                        selectcolor=theme.ACCENT, font=self.f_hint, borderwidth=0)
-        menu.add_command(label="Открыть следующую букву  (F4)", command=self.next_stage)
-        menu.add_command(label="Убрать последнюю букву  (Shift+F4)", command=self.prev_stage)
+        menu.add_command(label=self._tr("Открыть следующую букву  (F4)"), command=self.next_stage)
+        menu.add_command(label=self._tr("Убрать последнюю букву  (Shift+F4)"),
+                         command=self.prev_stage)
         menu.add_separator()
         self._target_choice = tk.IntVar(value=self.course_target_wpm)
         for wpm in TARGET_SPEEDS_WPM:
-            menu.add_radiobutton(label=f"Цель: {wpm} слов/мин", value=wpm,
+            menu.add_radiobutton(label=self._tr(f"Цель: {wpm} слов/мин"), value=wpm,
                                  variable=self._target_choice,
                                  command=lambda w=wpm: self.set_course_target(w))
         chip = self._chips[2]
@@ -1570,11 +1423,22 @@ class TypingApp(tk.Tk):
 
     def _key_base(self, name: str) -> tuple[str, str]:
         """Цвета клавиши в покое: в курсе всё, кроме открытых букв, приглушено."""
-        layout = LAYOUTS[self.lang]
+        layout = LAYOUTS[self._keyboard_code()]
         if (self.mode is Mode.LESSON and len(name) == 1 and name != " "
                 and name not in self._course_letters()
                 and not (name == "ё" and "е" in self._course_letters())):
             return theme.KEY_LOCKED_BG, theme.KEY_LOCKED_FG
+        if (self.error_heatmap or self.mode is Mode.ADAPTIVE) and len(name) == 1:
+            samples = self.profile.char_total[name]
+            if samples >= 4 and name != " ":
+                rate = self.profile.char_errors[name] / samples
+                color = (theme.BAD if rate >= 0.2 else
+                         theme.WARN if rate >= 0.05 else theme.GOOD)
+                return color, theme.BG
+        if self.colored_fingers:
+            finger = finger_for(self._keyboard_code(), name)
+            if finger is not None:
+                return theme.FINGER_ZONE_COLORS[finger], theme.TEXT
         return (theme.KEY_HOME_BG if name in layout.anchors else theme.KEY_BG), theme.KEY_FG
 
     def _refresh_course_keys(self) -> None:
@@ -1593,6 +1457,67 @@ class TypingApp(tk.Tk):
         self.strict = not self.strict
         self._refresh_hint()
         self.restart_test()
+
+    def _tr(self, value: str) -> str:
+        return i18n.translate(value, self.ui_language)
+
+    def toggle_ui_language(self) -> None:
+        self.ui_language = "en" if self.ui_language == "ru" else "ru"
+        self._persist()
+        self._show_notice("Interface language saved — restart the application"
+                          if self.ui_language == "en"
+                          else "Язык интерфейса сохранён — перезапустите приложение")
+
+    def _localize_widgets(self, parent) -> None:
+        """Translate built-in visible text; never touch the exercise text."""
+        if self.ui_language != "en":
+            return
+        if isinstance(parent, (tk.Label, tk.Button, tk.Checkbutton)):
+            original = parent.cget("text")
+            if original:
+                parent.configure(text=self._tr(original))
+        for child in parent.winfo_children():
+            self._localize_widgets(child)
+
+    def _localize_menu(self, menu: tk.Menu) -> None:
+        if self.ui_language != "en":
+            return
+        count = menu.index("end")
+        if count is None:
+            return
+        for i in range(count + 1):
+            kind = menu.type(i)
+            if kind in ("cascade", "command", "checkbutton", "radiobutton"):
+                label = menu.entrycget(i, "label")
+                menu.entryconfigure(i, label=self._tr(label))
+                if kind == "cascade":
+                    child = menu.entrycget(i, "menu")
+                    if child:
+                        self._localize_menu(menu.nametowidget(child))
+
+    def toggle_theme(self) -> None:
+        self.light_theme = not self.light_theme
+        self._persist()
+        self._show_notice("Тема сохранена — перезапустите приложение")
+
+    def toggle_ghost(self) -> None:
+        self.ghost_enabled = not self.ghost_enabled
+        self._update_progress()
+        self._persist()
+
+    def toggle_sound(self) -> None:
+        self.sound_enabled = not self.sound_enabled
+        self._persist()
+
+    def toggle_error_heatmap(self) -> None:
+        self.error_heatmap = not self.error_heatmap
+        self._refresh_course_keys()
+        self._persist()
+
+    def toggle_finger_zones(self) -> None:
+        self.colored_fingers = not self.colored_fingers
+        self._refresh_course_keys()
+        self._persist()
 
     def toggle_keyboard(self) -> None:
         self.show_keyboard = not self.show_keyboard
@@ -1628,16 +1553,25 @@ class TypingApp(tk.Tk):
                               "danger", RESET_CONFIRM_MS)
 
     def reset_stats(self) -> None:
+        progress.clear_history()
         self.profile = Profile()
+        self.achievements.clear()
         self._refresh_session_line()
         self._refresh_stats(force=True)
         self._persist()
 
     def _refresh_chips(self) -> None:
-        self.lang_var.set("РУССКИЙ" if self.lang == "ru" else "ENGLISH")
-        self.mode_var.set(self.mode.title.upper())
-        self.stage_var.set(f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
-                           f" · ФОКУС «{self._course_focus().upper()}»  ▾")
+        title = {"ru": "РУССКИЙ", "en": "ENGLISH", "uk": "УКРАЇНСЬКА",
+                 "be": "БЕЛАРУСКАЯ"}[self.lang]
+        if self.lang == "en":
+            title += " / " + LAYOUTS[self._keyboard_code()].title.upper()
+        self.lang_var.set(self._tr(title))
+        self.mode_var.set(self._tr(self.mode.title.upper()))
+        self.stage_var.set(self._tr(
+            f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
+            f" · ★ {awards.stars(self.course[self.lang])}"
+            f" · ФОКУС «{self._course_focus().upper()}»  ▾"
+        ))
         if len(self._chips) == 3:
             # Ступень имеет смысл только в режиме уроков: вне их чип скрыт, а
             # не приглушён — клик по приглушённому молча менял режим.
@@ -1649,7 +1583,7 @@ class TypingApp(tk.Tk):
                 chip.pack_forget()
         self.source.lang, self.source.mode = self.lang, self.mode
         self.source.options = self.options
-        self.length_var.set(f"{self.length.title} ▾")
+        self.length_var.set(self._tr(f"{self.length.title} ▾"))
         if hasattr(self, "_extra_caption"):
             self._refresh_extra_tile()
         self._refresh_option_chips()
@@ -1663,7 +1597,7 @@ class TypingApp(tk.Tk):
         tile, row = self.stat_tiles[-1], self._stats_row
         col = 2 * (len(self.stat_tiles) - 1)
         if caption:
-            self._extra_caption.configure(text=caption)
+            self._extra_caption.configure(text=self._tr(caption))
             if not self._extra_shown:
                 tile.grid()
                 row.columnconfigure(col, weight=1, uniform="tile")
@@ -1691,7 +1625,7 @@ class TypingApp(tk.Tk):
             label = {"phrase": "одна фраза",
                      "words": f"{length.amount} слов",
                      "time": f"{length.amount} секунд"}[length.kind]
-            menu.add_radiobutton(label=label, variable=self._length_choice,
+            menu.add_radiobutton(label=self._tr(label), variable=self._length_choice,
                                  value=length.key,
                                  command=lambda chosen=length: self.set_length(chosen))
         chip = self._length_chip
@@ -1769,9 +1703,14 @@ class TypingApp(tk.Tk):
             bits.append("строгий режим включён")
         if not self.show_keyboard:
             bits.append("клавиатура скрыта (F6)")
-        self.hint_var.set("     ".join(bits))
+        self.hint_var.set(self._tr("     ".join(bits)))
 
     # ------------------------------------------------------------------ прочее
+
+    def open_progress(self) -> None:
+        """Open the on-demand progress screen without background timers."""
+        window = progress_view.show(self)
+        self._localize_widgets(window)
 
     def _persist(self) -> None:
         save_profile(self.profile, {
@@ -1781,10 +1720,19 @@ class TypingApp(tk.Tk):
             "course_target_wpm": self.course_target_wpm,
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
+            "colored_fingers": self.colored_fingers,
+            "error_heatmap": self.error_heatmap,
+            "keyboard_variant": self.keyboard_variant,
+            "sound_enabled": self.sound_enabled,
+            "ghost_enabled": self.ghost_enabled,
+            "light_theme": self.light_theme,
+            "ui_language": self.ui_language,
+            "awards": sorted(self.achievements),
             "length": self.length.key,
             "caps": self.options.caps,
             "punct": self.options.punct,
             "digits": self.options.digits,
+            "font_delta": self.font_delta,
             **({"custom_title": self.custom.title, "custom_lang": self.custom.lang,
                 "custom_pos": self.custom.position} if self.custom else {}),
         })
