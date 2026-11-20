@@ -48,6 +48,7 @@ from .layout import (
     CAPS_LOCK,
     EQUIVALENTS,
     FINGER_NAMES,
+    LANGUAGES,
     LAYOUTS,
     WRONG_LAYOUT,
     finger_for,
@@ -178,7 +179,7 @@ class TypingApp(tk.Tk):
         saved_lang = saved.get("lang")
         # A manually edited or damaged JSON profile can contain unhashable values.
         self.lang: str = (
-            saved_lang if isinstance(saved_lang, str) and saved_lang in LAYOUTS else "ru"
+            saved_lang if isinstance(saved_lang, str) and saved_lang in LANGUAGES else "ru"
         )
         try:
             self.mode = Mode(saved.get("mode", Mode.COMMON.value))
@@ -187,7 +188,7 @@ class TypingApp(tk.Tk):
         # Курс: сколько букв открыто в каждом языке и целевая скорость.
         course = saved.get("course") if isinstance(saved.get("course"), dict) else {}
         self.course = {lang: clamp_unlocked(lang, course.get(lang))
-                       for lang in ("ru", "en")}
+                       for lang in LANGUAGES}
         wpm = saved.get("course_target_wpm")
         self.course_target_wpm = wpm if wpm in TARGET_SPEEDS_WPM else DEFAULT_TARGET_WPM
         self.strict: bool = bool(saved.get("strict", False))
@@ -1139,7 +1140,7 @@ class TypingApp(tk.Tk):
     def _restore_custom(self, saved: dict) -> CustomText | None:
         text = load_custom_text()
         lang = saved.get("custom_lang")
-        if not text or not isinstance(lang, str) or lang not in LAYOUTS:
+        if not text or not isinstance(lang, str) or lang not in LANGUAGES:
             return None
         title = saved.get("custom_title")
         try:
@@ -1611,7 +1612,7 @@ class TypingApp(tk.Tk):
             # Язык задаёт сам текст: на другой раскладке его не набрать.
             self._show_notice("Язык задаёт открытый текст — Ctrl+O откроет другой")
             return
-        self.lang = "en" if self.lang == "ru" else "ru"
+        self.lang = LANGUAGES[(LANGUAGES.index(self.lang) + 1) % len(LANGUAGES)]
         self._refresh_chips()
         self._layout_keyboard()
         self.new_test()
@@ -1802,8 +1803,11 @@ class TypingApp(tk.Tk):
         self._persist()
 
     def _refresh_chips(self) -> None:
-        self.lang_var.set("РУССКИЙ" if self.lang == "ru"
-                          else f"ENGLISH / {LAYOUTS[self._keyboard_code()].title.upper()}")
+        title = {"ru": "РУССКИЙ", "en": "ENGLISH", "uk": "УКРАЇНСЬКА",
+                 "be": "БЕЛАРУСКАЯ"}[self.lang]
+        if self.lang == "en":
+            title += " / " + LAYOUTS[self._keyboard_code()].title.upper()
+        self.lang_var.set(title)
         self.mode_var.set(self.mode.title.upper())
         self.stage_var.set(f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
                            f" · ★ {awards.stars(self.course[self.lang])}"
