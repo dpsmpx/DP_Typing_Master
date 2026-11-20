@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -77,7 +78,7 @@ def _migrate(data: dict) -> dict:
     if data.get("schema") == 1:
         data = dict(data)
         best = data.pop("best_wpm", None)
-        if isinstance(best, (int, float)) and best > 0:
+        if _is_number(best) and best > 0:
             data["records"] = {LEGACY_RECORD: float(best)}
         data["schema"] = SCHEMA
     return data
@@ -115,11 +116,11 @@ def restore(profile: Profile, data: dict) -> None:
     """Влить сохранённые данные в профиль (значения проверяются на тип)."""
     def _num(key: str, default=0):
         value = data.get(key, default)
-        return value if isinstance(value, (int, float)) else default
+        return value if _is_number(value) and value >= 0 else default
 
     profile.tests = int(_num("tests"))
     profile.total_keystrokes = int(_num("total_keystrokes"))
-    profile.total_errors = int(_num("total_errors"))
+    profile.total_errors = min(int(_num("total_errors")), profile.total_keystrokes)
     profile.total_time = float(_num("total_time", 0.0))
     profile.best_combo = int(_num("best_combo"))
     for field, target in (("char_total", profile.char_total),
@@ -138,7 +139,11 @@ def restore(profile: Profile, data: dict) -> None:
 
 def _is_number(value) -> bool:
     # bool — подкласс int, но True вместо числа — это мусор, а не 1.
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and math.isfinite(value)
 
 
 def _per_char(raw, kind) -> dict:
@@ -148,4 +153,4 @@ def _per_char(raw, kind) -> dict:
     allowed = (int,) if kind is int else (int, float)
     return {k: kind(v) for k, v in raw.items()
             if isinstance(k, str) and len(k) == 1
-            and isinstance(v, allowed) and not isinstance(v, bool)}
+            and isinstance(v, allowed) and _is_number(v) and v >= 0}

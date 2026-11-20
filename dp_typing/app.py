@@ -167,7 +167,9 @@ class TypingApp(tk.Tk):
         self.profile = Profile()
         saved = load_profile()
         restore_profile(self.profile, saved)
-        self.lang: str = saved.get("lang", "ru") if saved.get("lang") in LAYOUTS else "ru"
+        saved_lang = saved.get("lang")
+        # A manually edited or damaged JSON profile can contain unhashable values.
+        self.lang: str = saved_lang if isinstance(saved_lang, str) and saved_lang in LAYOUTS else "ru"
         try:
             self.mode = Mode(saved.get("mode", Mode.COMMON.value))
         except ValueError:
@@ -1013,7 +1015,7 @@ class TypingApp(tk.Tk):
     def _restore_custom(self, saved: dict) -> CustomText | None:
         text = load_custom_text()
         lang = saved.get("custom_lang")
-        if not text or lang not in LAYOUTS:
+        if not text or not isinstance(lang, str) or lang not in LAYOUTS:
             return None
         position = saved.get("custom_pos", 0)
         if not isinstance(position, int) or not 0 <= position < len(text):

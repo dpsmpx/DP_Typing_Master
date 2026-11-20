@@ -1073,3 +1073,26 @@ def test_smoke_test_entrypoint_initializes_real_tk(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr(sys, "argv", ["DP_Typing_Master.py", "--smoke-test"])
     assert main() == 0
+
+
+def test_unhashable_profile_languages_do_not_crash_startup(tmp_path, monkeypatch):
+    """A valid JSON profile can still have invalid (list/dict) language fields."""
+    import json
+
+    from dp_typing import app as app_module
+    from dp_typing import storage
+
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({"schema": 2, "lang": [], "mode": {},
+                                        "custom_lang": [], "custom_pos": 0}),
+                            encoding="utf-8")
+    storage.save_custom_text("this is a sufficiently long example for testing",
+                             path=tmp_path / "custom.txt")
+    monkeypatch.setattr(storage, "config_path", lambda: profile_path)
+    window = _make_window(app_module)
+    try:
+        assert window.lang == "ru"
+        assert window.mode is Mode.COMMON
+        assert window.custom is None
+    finally:
+        window.destroy()
