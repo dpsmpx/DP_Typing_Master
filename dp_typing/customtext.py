@@ -16,7 +16,8 @@ from .layout import alphabet_of, stroke_for
 from .words import Length
 
 #: Встроенные примеры — на случай, когда свой текст ещё не открыт.
-SAMPLE_FILES = {"ru": "sample_ru.txt", "en": "sample_en.txt"}
+SAMPLE_FILES = {"ru": "sample_ru.txt", "en": "sample_en.txt",
+                "uk": "sample_uk.txt", "be": "sample_be.txt"}
 
 #: Больше этого не читаем: это уже не текст для тренировки, а что-то не то.
 MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -56,7 +57,14 @@ def detect_lang(text: str) -> str:
         lang = alphabet_of(ch)
         if lang is not None:
             counts[lang] += 1
-    return "ru" if counts["ru"] >= counts["en"] else "en"
+    if counts["ru"] > counts["en"]:
+        lower = text.lower()
+        if "ў" in lower:
+            return "be"
+        if any(ch in lower for ch in "їєґ"):
+            return "uk"
+        return "ru"
+    return "en"
 
 
 def typeable(text: str, lang: str) -> str:
