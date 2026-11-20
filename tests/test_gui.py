@@ -694,7 +694,6 @@ def test_text_options_change_the_text(app):
     assert app._option_chips["caps"].cget("fg") != theme.ACCENT
 
 
-
 def _click_virtual_key(window, name: str) -> None:
     """Generate a real Tk mouse event at a rendered virtual key."""
     rect, _ = window._kb_items[name]
@@ -762,6 +761,7 @@ def test_virtual_keyboard_respects_english_layout_and_chip_click(app):
     _click_virtual_key(app, "shift_right")
     _click_virtual_key(app, "/")  # Dvorak Shift + slash = question mark
     assert app.session.finished and app.session.errors == 0
+
 
 def test_full_keyboard_has_number_row_and_shifts(app):
     app.mode = Mode.COMMON
