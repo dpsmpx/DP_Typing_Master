@@ -52,7 +52,7 @@ jobs:
             platform: windows
           - os: ubuntu-24.04
             platform: linux
-          - os: macos-14
+          - os: macos-15
             platform: macos
     runs-on: ${{ matrix.os }}
     steps:
