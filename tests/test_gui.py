@@ -1163,3 +1163,15 @@ def test_progress_window_renders_with_empty_history(app, tmp_path, monkeypatch):
     assert windows
     for window in windows:
         window.destroy()
+
+
+def test_font_size_shortcuts_change_text_size_and_persist(app):
+    from dp_typing import storage
+
+    before = app.f_target.actual("size")
+    app.change_font_size(1)
+    assert app.f_target.actual("size") == before + 1
+    saved = storage.load()
+    assert saved.get("font_delta") == app.font_delta
+    app.change_font_size(-1)
+    assert app.f_target.actual("size") == before
