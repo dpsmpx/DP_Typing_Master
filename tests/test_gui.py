@@ -753,6 +753,7 @@ def test_virtual_keyboard_respects_english_layout_and_chip_click(app):
     assert app.lang != old_lang
 
     app.set_keyboard_variant("dvorak")
+    app.toggle_punct()  # A shift key exists only in the full keyboard.
     settle(app)
     _render(app, "A?")
     _click_virtual_key(app, "shift_left")
