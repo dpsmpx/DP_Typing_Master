@@ -28,7 +28,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
-from . import __version__, progress, progress_view, sound, theme
+from . import __version__, awards, progress, progress_view, sound, theme
 from .course import (
     DEFAULT_TARGET_WPM,
     MIN_SAMPLES,
@@ -195,6 +195,12 @@ class TypingApp(tk.Tk):
         self.sound_enabled = bool(saved.get("sound_enabled", False))
         self.ghost_enabled = bool(saved.get("ghost_enabled", False))
         self.light_theme = bool(saved.get("light_theme", False))
+        stored_awards = saved.get("awards", [])
+        self.achievements = (
+            set(stored_awards) & awards.MILESTONES.keys()
+            if isinstance(stored_awards, list)
+            and all(isinstance(item, str) for item in stored_awards) else set()
+        )
         self.length = Length.parse(saved.get("length"))
         size = saved.get("font_delta", 0)
         self.font_delta = max(-6, min(8, size)) if type(size) is int else 0
@@ -1104,9 +1110,18 @@ class TypingApp(tk.Tk):
         if self.mode is Mode.CUSTOM:
             self._advance_custom(session.pos, finished=not session.timed_out)
 
+        newly_earned = self._unlock_awards(metrics.accuracy)
+        if newly_earned:
+            self.result_var.set(self.result_var.get() + "  ·  " + ", ".join(newly_earned))
         self._refresh_session_line()
         self._refresh_hint()
         self._persist()
+
+    def _unlock_awards(self, accuracy: float) -> list[str]:
+        all_earned = awards.earned(self.profile.tests, self.profile.best_combo, accuracy)
+        new = sorted(all_earned - self.achievements)
+        self.achievements.update(new)
+        return [awards.MILESTONES[item] for item in new]
 
     # ------------------------------------------------------------ свой текст
 
@@ -1755,6 +1770,7 @@ class TypingApp(tk.Tk):
     def reset_stats(self) -> None:
         progress.clear_history()
         self.profile = Profile()
+        self.achievements.clear()
         self._refresh_session_line()
         self._refresh_stats(force=True)
         self._persist()
@@ -1763,6 +1779,7 @@ class TypingApp(tk.Tk):
         self.lang_var.set("РУССКИЙ" if self.lang == "ru" else "ENGLISH")
         self.mode_var.set(self.mode.title.upper())
         self.stage_var.set(f"КУРС {self.course[self.lang]}/{len(letter_order(self.lang))}"
+                           f" · ★ {awards.stars(self.course[self.lang])}"
                            f" · ФОКУС «{self._course_focus().upper()}»  ▾")
         if len(self._chips) == 3:
             # Ступень имеет смысл только в режиме уроков: вне их чип скрыт, а
@@ -1915,6 +1932,7 @@ class TypingApp(tk.Tk):
             "sound_enabled": self.sound_enabled,
             "ghost_enabled": self.ghost_enabled,
             "light_theme": self.light_theme,
+            "awards": sorted(self.achievements),
             "length": self.length.key,
             "caps": self.options.caps,
             "punct": self.options.punct,

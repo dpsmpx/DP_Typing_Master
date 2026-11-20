@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import tkinter as tk
 
-from . import progress, theme
+from . import awards, progress, theme
 from .layout import LAYOUTS
 
 
@@ -119,6 +119,15 @@ def show(app) -> tk.Toplevel:
     tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM, wraplength=780,
              text=(", ".join(f"{pair}: {rate:.0%}" for pair, rate in pairs)
                    if pairs else "Пока мало данных")).pack(anchor="w", padx=16)
+
+    _heading(content, "Награды")
+    unlocked = sorted(app.achievements)
+    label = (", ".join(awards.MILESTONES[k] for k in unlocked)
+             if unlocked else "Пока нет наград")
+    stars = awards.stars(app.course[app.lang])
+    tk.Label(content, bg=theme.BG, fg=theme.TEXT_DIM,
+             text=f"Курс: ★ {stars} · {label}", wraplength=780).pack(
+                 anchor="w", padx=16)
 
     _heading(content, "Последний результат")
     session = app.session

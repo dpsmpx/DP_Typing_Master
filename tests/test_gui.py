@@ -1221,3 +1221,14 @@ def test_light_theme_choice_persists_without_recoloring_live_widgets(app):
     app.toggle_theme()
     assert app.light_theme
     assert storage.load()["light_theme"] is True
+
+
+def test_award_unlock_is_idempotent_and_persisted(app):
+    from dp_typing import awards, storage
+
+    app.profile.tests = 10
+    new = app._unlock_awards(99)
+    assert awards.MILESTONES["ten"] in new
+    assert app._unlock_awards(99) == []
+    app._persist()
+    assert "ten" in storage.load()["awards"]
