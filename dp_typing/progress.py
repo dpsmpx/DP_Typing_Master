@@ -74,11 +74,11 @@ def record(lang: str, mode: str, metrics, path: Path | None = None,
     when = when if when is not None else datetime.now().astimezone()
     try:
         with closing(_connect(path)) as db, db:
+            values = (when.isoformat(timespec="seconds"), lang, mode, metrics.wpm,
+                      metrics.accuracy, metrics.errors, metrics.keystrokes, metrics.elapsed)
             db.execute("""INSERT INTO tests
                 (created_at, lang, mode, wpm, accuracy, errors, keystrokes, duration)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (when.isoformat(timespec="seconds"), lang, mode, metrics.wpm,
-                 metrics.accuracy, metrics.errors, metrics.keystrokes, metrics.elapsed))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", values)
         return True
     except (OSError, sqlite3.Error, ValueError, OverflowError):
         return False
@@ -104,12 +104,12 @@ def daily(limit: int = 30, path: Path | None = None) -> list[dict]:
     try:
         with closing(_connect(path)) as db:
             db.row_factory = sqlite3.Row
-            rows = db.execute("""SELECT substr(created_at, 1, 10) AS day,
-                    COUNT(*) AS tests, ROUND(AVG(wpm), 2) AS wpm,
-                    ROUND(100.0 * (SUM(keystrokes) - SUM(errors)) /
-                        NULLIF(SUM(keystrokes), 0), 2) AS accuracy
-                    FROM tests GROUP BY day ORDER BY day DESC LIMIT ?""",
-                    (max(0, min(limit, 365)),)).fetchall()
+            sql = """SELECT substr(created_at, 1, 10) AS day,
+                COUNT(*) AS tests, ROUND(AVG(wpm), 2) AS wpm,
+                ROUND(100.0 * (SUM(keystrokes) - SUM(errors)) /
+                    NULLIF(SUM(keystrokes), 0), 2) AS accuracy
+                FROM tests GROUP BY day ORDER BY day DESC LIMIT ?"""
+            rows = db.execute(sql, (max(0, min(limit, 365)),)).fetchall()
         return list(reversed([dict(row) for row in rows]))
     except (OSError, sqlite3.Error):
         return []
