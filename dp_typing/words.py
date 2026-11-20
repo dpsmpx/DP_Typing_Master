@@ -57,7 +57,8 @@ def load_words(lang: str) -> tuple[str, ...]:
     """Прочитать список слов из пакета. Кэшируется — файл читается один раз."""
     from importlib.resources import files
 
-    name = {"ru": "ru_common.txt", "en": "en_common.txt"}.get(lang)
+    name = {"ru": "ru_common.txt", "en": "en_common.txt",
+            "uk": "uk_common.txt", "be": "be_common.txt"}.get(lang)
     if name is None:
         raise ValueError(f"неизвестный язык: {lang!r}")
     raw = (files("dp_typing.data") / name).read_text(encoding="utf-8")
