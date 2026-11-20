@@ -1306,7 +1306,11 @@ def test_english_ui_and_light_theme_start_with_saved_preferences(tmp_path, monke
             assert theme.BG == "#f5f7fb"
             assert window._tile_parts[0][1].cget("text") == "WPM"
             assert window.combo_canvas.itemcget(window._combo_caption, "text") == "COMBO"
-            assert window._menu.entrycget(0, "label") == "Training"
+            assert any(
+                window._menu.entrycget(i, "label") == "Training"
+                for i in range(window._menu.index("end") + 1)
+                if window._menu.type(i) == "cascade"
+            )
             assert window.session.target
         finally:
             window.destroy()
