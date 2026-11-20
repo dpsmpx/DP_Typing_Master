@@ -50,9 +50,9 @@ from .layout import (
     FINGER_NAMES,
     LAYOUTS,
     WRONG_LAYOUT,
+    finger_for,
     input_problem,
     stroke_for,
-    finger_for,
 )
 from .storage import load as load_profile
 from .storage import load_custom_text, save_custom_text
