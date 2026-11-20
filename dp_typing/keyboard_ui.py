@@ -156,7 +156,7 @@ class KeyboardMixin:
         if stroke and stroke.shift_side:
             hand = "правой" if stroke.shift_side == "right" else "левой"
             hint += f" + Shift {hand} рукой"
-        alternative = EQUIVALENTS[self.lang].get(ch) if ch else None
+        alternative = EQUIVALENTS.get(self.lang, {}).get(ch) if ch else None
         if hint and alternative:
             hint += f" · можно и «{alternative}»"
         self.finger_var.set(self._tr(hint))
