@@ -197,6 +197,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         variant = saved.get("keyboard_variant")
         self.keyboard_variant = variant if variant in ("dvorak", "colemak") else "en"
         self.colored_fingers = bool(saved.get("colored_fingers", False))
+        self.error_heatmap = bool(saved.get("error_heatmap", False))
         self.sound_enabled = bool(saved.get("sound_enabled", False))
         self.ghost_enabled = bool(saved.get("ghost_enabled", False))
         self.light_theme = bool(saved.get("light_theme", False))
@@ -572,6 +573,8 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         settings.add_command(label="Цифры  ·  F11", command=self.toggle_digits)
         settings.add_command(label="Цветные зоны пальцев",
                              command=self.toggle_finger_zones)
+        settings.add_command(label="Карта ошибок на клавиатуре",
+                             command=self.toggle_error_heatmap)
         settings.add_command(label="Звук нажатий и ошибок",
                              command=self.toggle_sound)
         settings.add_command(label="Каретка темпа рекорда",
@@ -1112,6 +1115,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
             return
         metrics = session.metrics()
         new_record = self.profile.absorb(session, self._record_key())
+        self._refresh_course_keys()
         progress.record(self.lang, self.mode.value, metrics)
         self._refresh_stats(force=True)
 
@@ -1422,6 +1426,13 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
                 and name not in self._course_letters()
                 and not (name == "ё" and "е" in self._course_letters())):
             return theme.KEY_LOCKED_BG, theme.KEY_LOCKED_FG
+        if (self.error_heatmap or self.mode is Mode.ADAPTIVE) and len(name) == 1:
+            samples = self.profile.char_total[name]
+            if samples >= 4 and name != " ":
+                rate = self.profile.char_errors[name] / samples
+                color = (theme.BAD if rate >= 0.2 else
+                         theme.WARN if rate >= 0.05 else theme.GOOD)
+                return color, theme.BG
         if self.colored_fingers:
             finger = finger_for(self._keyboard_code(), name)
             if finger is not None:
@@ -1494,6 +1505,11 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
 
     def toggle_sound(self) -> None:
         self.sound_enabled = not self.sound_enabled
+        self._persist()
+
+    def toggle_error_heatmap(self) -> None:
+        self.error_heatmap = not self.error_heatmap
+        self._refresh_course_keys()
         self._persist()
 
     def toggle_finger_zones(self) -> None:
@@ -1703,6 +1719,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
             "colored_fingers": self.colored_fingers,
+            "error_heatmap": self.error_heatmap,
             "keyboard_variant": self.keyboard_variant,
             "sound_enabled": self.sound_enabled,
             "ghost_enabled": self.ghost_enabled,

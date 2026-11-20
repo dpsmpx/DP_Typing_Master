@@ -1267,3 +1267,18 @@ def test_altgr_printable_character_is_counted(app):
         "char": "а", "keysym": "a", "state": 0x4 | 0x8,
     })())
     assert app.session.keystrokes == 1
+
+
+def test_error_heatmap_is_visible_on_main_keyboard(app):
+    from dp_typing import theme
+
+    target_key = "а" if app.lang == "ru" else "f"
+    app.profile.char_total[target_key] = 10
+    app.profile.char_errors[target_key] = 3
+    app.toggle_error_heatmap()
+    assert app.error_heatmap
+    assert app._key_base(target_key)[0] == theme.BAD
+    app.profile.char_errors[target_key] = 0
+    assert app._key_base(target_key)[0] == theme.GOOD
+    app.toggle_error_heatmap()
+    assert not app.error_heatmap
