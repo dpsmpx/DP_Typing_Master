@@ -14,7 +14,7 @@ ENGLISH = {
     "УКРАЇНСЬКА": "UKRAINIAN", "БЕЛАРУСКАЯ": "BELARUSIAN",
     "ЧАСТОТНЫЕ СЛОВА": "COMMON WORDS", "ПСЕВДОСЛОВА": "PSEUDOWORDS",
     "СЛАБЫЕ КЛАВИШИ": "WEAK KEYS", "СВОЙ ТЕКСТ": "CUSTOM TEXT",
-    "КУРС": "COURSE", "ФОКУС": "FOCUS", "ФРАЗА": "PHRASE",
+    "КУРС": "COURSE", "ФОКУС": "FOCUS",
     "Горячие клавиши": "Keyboard shortcuts",
     "Тренировка": "Training", "Настройки": "Settings",
     "Раскладка EN": "English keyboard", "Справка": "Help",
