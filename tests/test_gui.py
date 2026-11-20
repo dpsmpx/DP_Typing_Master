@@ -1155,10 +1155,11 @@ def test_progress_window_renders_with_empty_history(app, tmp_path, monkeypatch):
     from dp_typing import progress
 
     monkeypatch.setattr(progress, "database_path", lambda: tmp_path / "none.sqlite3")
-    window = app.open_progress()
-    # The button handler leaves no new timer on the root Tk.
+    import tkinter as tk
+
+    app.open_progress()
     app.update()
-    widgets = [w for w in app.winfo_children() if str(w).startswith(str(app) + ".!toplevel")]
-    assert widgets
-    for widget in widgets:
-        widget.destroy()
+    windows = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)]
+    assert windows
+    for window in windows:
+        window.destroy()
