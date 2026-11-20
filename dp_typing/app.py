@@ -798,8 +798,9 @@ class TypingApp(tk.Tk):
             self._custom_chunk = self._custom_source().chunk(self.length)
             self._start_session(self._custom_chunk)
             return
-        self._start_session(self.source.phrase(self.length.word_count(),
-                                               self.profile.weak_chars()))
+        self._start_session(self.source.phrase(
+            self.length.word_count(), self.profile.weak_chars(), self.profile.weak_bigrams()
+        ))
 
     def restart_test(self) -> None:
         """Та же фраза заново — полезно, чтобы отработать сложное место."""

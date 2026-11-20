@@ -157,14 +157,18 @@ def words_for_zone(lang: str, allowed: str) -> tuple[str, ...]:
 # ---------------------------------------------------------- адаптивный отбор
 
 def adaptive_weights(
-    words: Sequence[str], weak: Sequence[tuple[str, float]], boost: float = 6.0
+    words: Sequence[str], weak: Sequence[tuple[str, float]], boost: float = 6.0,
+    weak_bigrams: Sequence[tuple[str, float]] = (),
 ) -> list[float]:
     """Вес слова тем выше, чем больше в нём проблемных для пользователя букв."""
-    if not weak:
+    if not weak and not weak_bigrams:
         return [1.0] * len(words)
     rates = dict(weak)
+    pairs = dict(weak_bigrams)
     return [
-        1.0 + boost * sum(rates.get(ch, 0.0) for ch in set(word))
+        1.0 + boost * (sum(rates.get(ch, 0.0) for ch in set(word))
+                       + sum(pairs.get(word[i:i + 2], 0.0)
+                             for i in range(len(word) - 1)))
         for word in words
     ]
 
@@ -330,14 +334,16 @@ class TextSource:
         клавиш, а свой текст уже содержит и заглавные, и знаки."""
         return self.mode in (Mode.COMMON, Mode.PSEUDO, Mode.ADAPTIVE) and self.options.any
 
-    def phrase(self, word_count: int = 9, weak: Sequence[tuple[str, float]] = ()) -> str:
+    def phrase(self, word_count: int = 9, weak: Sequence[tuple[str, float]] = (),
+               weak_bigrams: Sequence[tuple[str, float]] = ()) -> str:
         """Собрать фразу из ``word_count`` слов."""
-        words = self._pick(word_count, weak)
+        words = self._pick(word_count, weak, weak_bigrams)
         if self.decorates:
             words = decorate(words, self.rng, self.options)
         return " ".join(words)
 
-    def _pick(self, n: int, weak: Sequence[tuple[str, float]]) -> list[str]:
+    def _pick(self, n: int, weak: Sequence[tuple[str, float]],
+              weak_bigrams: Sequence[tuple[str, float]] = ()) -> list[str]:
         rng = self.rng
         if self.mode is Mode.PSEUDO:
             return [pseudo_word(self.lang, rng) for _ in range(n)]
@@ -350,6 +356,8 @@ class TextSource:
             return course_words(self.lang, letters, self.focus or letters[-1], n, rng)
 
         pool = load_words(self.lang)
-        if self.mode is Mode.ADAPTIVE and weak:
-            return rng.choices(pool, weights=adaptive_weights(pool, weak), k=n)
+        if self.mode is Mode.ADAPTIVE and (weak or weak_bigrams):
+            return rng.choices(
+                pool, weights=adaptive_weights(pool, weak, weak_bigrams=weak_bigrams), k=n
+            )
         return rng.choices(pool, k=n)

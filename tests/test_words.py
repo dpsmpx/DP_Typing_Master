@@ -254,3 +254,11 @@ def test_length_titles():
     assert Length("phrase").title == "ФРАЗА"
     assert Length("words", 25).title == "25 СЛОВ"
     assert Length("time", 60).title == "60 С"
+
+
+def test_adaptive_weights_boost_weak_bigrams():
+    from dp_typing.words import adaptive_weights
+
+    words = ["alpha", "abacus", "aba"]
+    weights = adaptive_weights(words, (), weak_bigrams=(("ab", 0.8),))
+    assert weights[1] == weights[2] > weights[0]

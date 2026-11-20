@@ -97,6 +97,8 @@ def save(profile: Profile, extra: dict | None = None, path: Path | None = None) 
         "records": {k: round(v, 2) for k, v in profile.records.items()},
         "char_total": dict(profile.char_total),
         "char_errors": dict(profile.char_errors),
+        "bigram_total": dict(profile.bigram_total),
+        "bigram_errors": dict(profile.bigram_errors),
         "key_speed": {k: round(v, 1) for k, v in profile.key_speed.items()},
         "key_acc": {k: round(v, 4) for k, v in profile.key_acc.items()},
         "key_samples": dict(profile.key_samples),
@@ -127,6 +129,8 @@ def restore(profile: Profile, data: dict) -> None:
                           ("char_errors", profile.char_errors),
                           ("key_samples", profile.key_samples)):
         target.update(_per_char(data.get(field), int))
+    profile.bigram_total.update(_per_bigram(data.get("bigram_total")))
+    profile.bigram_errors.update(_per_bigram(data.get("bigram_errors")))
     profile.key_speed.update(_per_char(data.get("key_speed"), float))
     profile.key_acc.update(_per_char(data.get("key_acc"), float))
     records = data.get("records")
@@ -154,3 +158,12 @@ def _per_char(raw, kind) -> dict:
     return {k: kind(v) for k, v in raw.items()
             if isinstance(k, str) and len(k) == 1
             and isinstance(v, allowed) and _is_number(v) and v >= 0}
+
+
+def _per_bigram(raw) -> dict:
+    """Ignore malformed persisted bigram statistics."""
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items()
+            if isinstance(k, str) and len(k) == 2
+            and isinstance(v, int) and not isinstance(v, bool) and v >= 0}

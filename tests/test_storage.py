@@ -129,3 +129,18 @@ def test_load_nonfinite_json_does_not_break_restore(tmp_path):
     p = Profile()
     restore(p, load(path))
     assert p.tests == 0 and p.total_time == 0
+
+
+def test_bigram_profile_round_trip_and_invalid_entries(tmp_path):
+    path = tmp_path / "profile.json"
+    p = Profile()
+    p.bigram_total["ab"] = 5
+    p.bigram_errors["ab"] = 2
+    assert save(p, path=path)
+    saved = load(path)
+    saved["bigram_total"]["x"] = 2
+    saved["bigram_errors"]["ab"] = -1
+    other = Profile()
+    restore(other, saved)
+    assert other.bigram_total == {"ab": 5}
+    assert other.bigram_errors == {}
