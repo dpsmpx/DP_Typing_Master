@@ -37,8 +37,9 @@ def test_wordlist_loads_and_is_clean(lang):
     assert len(set(words)) == len(words), "в словаре есть дубликаты"
 
 
-@pytest.mark.parametrize("lang,alphabet", [("ru", RU_ALPHABET), ("en", EN_ALPHABET),
-                                            ("uk", UK_ALPHABET)])
+@pytest.mark.parametrize("lang,alphabet", [
+    ("ru", RU_ALPHABET), ("en", EN_ALPHABET), ("uk", UK_ALPHABET),
+])
 def test_wordlist_covers_whole_alphabet(lang, alphabet):
     """Ревью #8: буква «й» раньше не генерировалась вообще."""
     assert alphabet <= set("".join(load_words(lang)))
