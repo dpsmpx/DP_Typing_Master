@@ -1062,3 +1062,14 @@ def test_course_target_speed_is_saved(app, tmp_path):
     saved = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
     assert saved["course_target_wpm"] == 45
     assert saved["course"][app.lang] == len(app._course_letters())
+
+
+def test_smoke_test_entrypoint_initializes_real_tk(tmp_path, monkeypatch):
+    """The packaged executable uses exactly this entry point for its smoke test."""
+    import sys
+
+    from DP_Typing_Master import main
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["DP_Typing_Master.py", "--smoke-test"])
+    assert main() == 0
