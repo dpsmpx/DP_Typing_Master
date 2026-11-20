@@ -28,7 +28,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from tkinter import font as tkfont
 
-from . import __version__, progress, progress_view, theme
+from . import __version__, progress, progress_view, sound, theme
 from .course import (
     DEFAULT_TARGET_WPM,
     MIN_SAMPLES,
@@ -186,6 +186,7 @@ class TypingApp(tk.Tk):
         self.strict: bool = bool(saved.get("strict", False))
         self.show_keyboard: bool = bool(saved.get("show_keyboard", True))
         self.colored_fingers = bool(saved.get("colored_fingers", False))
+        self.sound_enabled = bool(saved.get("sound_enabled", False))
         self.length = Length.parse(saved.get("length"))
         size = saved.get("font_delta", 0)
         self.font_delta = max(-6, min(8, size)) if type(size) is int else 0
@@ -546,6 +547,8 @@ class TypingApp(tk.Tk):
         settings.add_command(label="Цифры  ·  F11", command=self.toggle_digits)
         settings.add_command(label="Цветные зоны пальцев",
                              command=self.toggle_finger_zones)
+        settings.add_command(label="Звук нажатий и ошибок",
+                             command=self.toggle_sound)
         menu.add_cascade(label="Настройки", menu=settings)
         menu.add_command(label="Прогресс  ·  Ctrl+P", command=self.open_progress)
         menu.add_command(label="Справка  ·  F1", command=self.toggle_help)
@@ -1021,6 +1024,8 @@ class TypingApp(tk.Tk):
         if not effect.accepted or self.session is None:
             return
         session = self.session
+        if effect.changed and self.sound_enabled:
+            sound.play(self, effect.correct)
 
         # Перекрашиваем только изменившиеся позиции.
         for idx in effect.changed:
@@ -1671,6 +1676,10 @@ class TypingApp(tk.Tk):
         self._refresh_hint()
         self.restart_test()
 
+    def toggle_sound(self) -> None:
+        self.sound_enabled = not self.sound_enabled
+        self._persist()
+
     def toggle_finger_zones(self) -> None:
         self.colored_fingers = not self.colored_fingers
         self._refresh_course_keys()
@@ -1869,6 +1878,7 @@ class TypingApp(tk.Tk):
             "strict": self.strict,
             "show_keyboard": self.show_keyboard,
             "colored_fingers": self.colored_fingers,
+            "sound_enabled": self.sound_enabled,
             "length": self.length.key,
             "caps": self.options.caps,
             "punct": self.options.punct,

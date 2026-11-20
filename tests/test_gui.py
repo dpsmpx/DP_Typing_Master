@@ -1189,3 +1189,15 @@ def test_finger_zone_colors_toggle_without_touching_training_state(app):
     assert app.session.target == start
     app.toggle_finger_zones()
     assert not app.colored_fingers
+
+
+def test_optional_sound_plays_for_key_and_error(app, monkeypatch):
+    from dp_typing import sound
+
+    events = []
+    monkeypatch.setattr(sound, "play", lambda _app, correct: events.append(correct))
+    app.toggle_sound()
+    assert app.sound_enabled
+    press(app, app.session.target[0])
+    press(app, "♜")
+    assert events == [True, False]
