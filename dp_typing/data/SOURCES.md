@@ -17,3 +17,10 @@
 
 Оба списка покрывают алфавит целиком: 33 буквы для русского, 26 для
 английского. Лицензия MIT совместима с GPL-3.0 этого проекта.
+
+## Additional starter languages (November 2026)
+
+`uk_common.txt` and `be_common.txt` are small manually assembled starter
+lexicons for offline Ukrainian and Belarusian training. They are **not**
+frequency-ranked 1200-word dictionaries; linguistic review and expansion remain
+necessary before they can claim parity with ru/en. Example files are bundled.
