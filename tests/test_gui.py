@@ -1139,3 +1139,13 @@ def test_restored_custom_text_uses_detected_language(tmp_path, monkeypatch):
         assert window.session is not None and window.session.target
     finally:
         window.destroy()
+
+
+def test_finished_session_is_stored_in_sqlite_history(app, tmp_path, monkeypatch):
+    from dp_typing import progress
+
+    monkeypatch.setattr(progress, "database_path", lambda: tmp_path / "history.sqlite3")
+    for char in app.session.target:
+        press(app, char)
+    assert app.session.finished
+    assert len(progress.recent(path=tmp_path / "history.sqlite3")) == 1

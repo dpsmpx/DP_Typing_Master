@@ -43,6 +43,7 @@ from .course import (
 )
 from .customtext import CustomText, CustomTextError, sample
 from .engine import Mark, Profile, TypingSession
+from . import progress
 from .fmt import count, wrap_words
 from .layout import (
     CAPS_LOCK,
@@ -167,6 +168,7 @@ class TypingApp(tk.Tk):
         self.profile = Profile()
         saved = load_profile()
         restore_profile(self.profile, saved)
+        progress.migrate_legacy(self.profile)
         saved_lang = saved.get("lang")
         # A manually edited or damaged JSON profile can contain unhashable values.
         self.lang: str = (
@@ -987,6 +989,7 @@ class TypingApp(tk.Tk):
             return
         metrics = session.metrics()
         new_record = self.profile.absorb(session, self._record_key())
+        progress.record(self.lang, self.mode.value, metrics)
         self._refresh_stats(force=True)
 
         parts = [f"{metrics.wpm:.0f} слов/мин", f"{metrics.accuracy:.0f}% точности"]
