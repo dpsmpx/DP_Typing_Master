@@ -143,3 +143,15 @@ def legacy_baseline(path: Path | None = None) -> dict:
         return json.loads(row[0]) if row else {}
     except (OSError, sqlite3.Error, ValueError, TypeError):
         return {}
+
+
+def clear_history(path: Path | None = None) -> bool:
+    """F7 reset must clear history as well as the JSON profile."""
+    path = path if path is not None else database_path()
+    try:
+        with closing(_connect(path)) as db, db:
+            db.execute("DELETE FROM tests")
+            db.execute("DELETE FROM metadata")
+        return True
+    except (OSError, sqlite3.Error):
+        return False

@@ -1149,3 +1149,16 @@ def test_finished_session_is_stored_in_sqlite_history(app, tmp_path, monkeypatch
         press(app, char)
     assert app.session.finished
     assert len(progress.recent(path=tmp_path / "history.sqlite3")) == 1
+
+
+def test_progress_window_renders_with_empty_history(app, tmp_path, monkeypatch):
+    from dp_typing import progress
+
+    monkeypatch.setattr(progress, "database_path", lambda: tmp_path / "none.sqlite3")
+    window = app.open_progress()
+    # The button handler leaves no new timer on the root Tk.
+    app.update()
+    widgets = [w for w in app.winfo_children() if str(w).startswith(str(app) + ".!toplevel")]
+    assert widgets
+    for widget in widgets:
+        widget.destroy()

@@ -43,7 +43,7 @@ from .course import (
 )
 from .customtext import CustomText, CustomTextError, sample
 from .engine import Mark, Profile, TypingSession
-from . import progress
+from . import progress, progress_view
 from .fmt import count, wrap_words
 from .layout import (
     CAPS_LOCK,
@@ -330,6 +330,11 @@ class TypingApp(tk.Tk):
 
         tk.Label(bar, text="DP TYPING MASTER", bg=theme.BG, fg=theme.TEXT,
                  font=self.f_chip).pack(side="left")
+        progress_link = tk.Label(bar, text="ПРОГРЕСС  ▸", bg=theme.PANEL,
+                                 fg=theme.ACCENT, font=self.f_chip,
+                                 padx=self.px(10), pady=self.px(4), cursor="hand2")
+        progress_link.pack(side="right")
+        progress_link.bind("<Button-1>", lambda _e: self.open_progress())
 
         chips = tk.Frame(bar, bg=theme.BG)
         chips.pack(side="left", padx=(self.px(18), 0))
@@ -527,6 +532,7 @@ class TypingApp(tk.Tk):
             ("F9 / F10 / F11", "заглавные / знаки препинания / цифры"),
             ("F1", "закрыть эту справку"),
             ("Ctrl+O", "открыть свой текст (.txt) и печатать его кусками"),
+            ("Ctrl+P", "прогресс, график, карта ошибок и дневная цель"),
             ("Ctrl+Q", "выход"),
         )
         tk.Label(self.help_frame, text="Горячие клавиши", bg=theme.PANEL_HI,
@@ -720,6 +726,8 @@ class TypingApp(tk.Tk):
             self.bind(f"<Control-{key}>", lambda _e: self._quit())
         for key in ("o", "O", "Cyrillic_shcha", "Cyrillic_SHCHA"):
             self.bind(f"<Control-{key}>", lambda _e: self._action(self.open_custom_text))
+        for key in ("p", "P", "Cyrillic_ze", "Cyrillic_ZE"):
+            self.bind(f"<Control-{key}>", lambda _e: self._action(self.open_progress))
 
     @staticmethod
     def _action(fn) -> str:
@@ -1632,6 +1640,7 @@ class TypingApp(tk.Tk):
                               "danger", RESET_CONFIRM_MS)
 
     def reset_stats(self) -> None:
+        progress.clear_history()
         self.profile = Profile()
         self._refresh_session_line()
         self._refresh_stats(force=True)
@@ -1776,6 +1785,10 @@ class TypingApp(tk.Tk):
         self.hint_var.set("     ".join(bits))
 
     # ------------------------------------------------------------------ прочее
+
+    def open_progress(self) -> None:
+        """Open the on-demand progress screen without background timers."""
+        progress_view.show(self)
 
     def _persist(self) -> None:
         save_profile(self.profile, {
