@@ -1282,3 +1282,30 @@ def test_error_heatmap_is_visible_on_main_keyboard(app):
     assert app._key_base(target_key)[0] == theme.GOOD
     app.toggle_error_heatmap()
     assert not app.error_heatmap
+
+
+def test_english_ui_and_light_theme_start_with_saved_preferences(tmp_path, monkeypatch):
+    """Load both settings through the real Tk initializer, not only pure helpers."""
+    import json
+
+    from dp_typing import app as app_module
+    from dp_typing import storage, theme
+
+    profile_file = tmp_path / "profile.json"
+    profile_file.write_text(json.dumps({
+        "schema": 2, "lang": "en", "mode": "common",
+        "ui_language": "en", "light_theme": True,
+    }), encoding="utf-8")
+    monkeypatch.setattr(storage, "config_path", lambda: profile_file)
+    try:
+        window = _make_window(app_module)
+        try:
+            assert window.ui_language == "en"
+            assert window.light_theme
+            assert "ENGLISH" in window.lang_var.get()
+            assert theme.BG == "#f5f7fb"
+            assert window.session.target
+        finally:
+            window.destroy()
+    finally:
+        theme.activate(False)
