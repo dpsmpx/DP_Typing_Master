@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import tkinter as tk
+from contextlib import suppress
 
 
 def play(widget: tk.Misc, correct: bool) -> None:
@@ -17,7 +18,5 @@ def play(widget: tk.Misc, correct: bool) -> None:
             return
         except (ImportError, OSError, RuntimeError):
             pass
-    try:
+    with suppress(tk.TclError):
         widget.bell()
-    except tk.TclError:
-        pass
