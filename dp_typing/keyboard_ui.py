@@ -160,4 +160,3 @@ class KeyboardMixin:
         if hint and alternative:
             hint += f" · можно и «{alternative}»"
         self.finger_var.set(self._tr(hint))
-

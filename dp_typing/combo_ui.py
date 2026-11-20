@@ -9,6 +9,7 @@ from . import theme
 ANIM_FRAMES = 8
 ANIM_STEP_MS = 28
 
+
 def _lerp_hex(a: str, b: str, t: float) -> str:
     """Линейная интерполяция двух цветов #rrggbb."""
     ar, ag, ab = int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16)
@@ -115,4 +116,3 @@ class ComboMixin:
             self.combo_canvas.itemconfigure(self._combo_value,
                                             fill=self._anim_ramp[self._anim_frame])
         self._anim_id = self.after(ANIM_STEP_MS, self._anim_tick)
-
