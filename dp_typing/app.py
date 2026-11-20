@@ -237,6 +237,8 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         self._stat_cache: dict[str, tuple] = {}
         self._kb_items: dict[str, tuple[int, int]] = {}
         self._kb_small: dict[str, int] = {}       # мелкие подписи «что под Shift»
+        self._kb_click_targets: dict[int, str] = {}
+        self._virtual_shift = False
         self._kb_size = (0, 0)
         self._kb_full_drawn: bool | None = None
         self._hot_key: str | None = None
@@ -535,6 +537,8 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         tk.Label(self.kb_holder, textvariable=self.finger_var, bg=theme.BG,
                  fg=theme.TEXT_DIM, font=self.f_hint).pack(pady=(self.px(2), 0))
         self.kb_canvas.bind("<Configure>", self._on_kb_configure)
+        self.kb_canvas.bind("<Button-1>", self._on_virtual_key_click)
+        self.kb_canvas.configure(cursor="hand2")
 
     def _build_footer(self, parent: tk.Frame) -> None:
         self.hint_var = tk.StringVar()

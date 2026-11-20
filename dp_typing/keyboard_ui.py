@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from types import SimpleNamespace
 
 from . import theme
 from .layout import EQUIVALENTS, FINGER_NAMES, LAYOUTS, stroke_for
@@ -64,7 +65,8 @@ class KeyboardMixin:
                              for base, up in zip(plain, shifted)])
             rows[-1] = [("shift_left", "SHIFT", SHIFT_UNITS, ""), *rows[-1],
                         ("shift_right", "SHIFT", SHIFT_UNITS, "")]
-        rows.append([(" ", self._tr("ПРОБЕЛ"), SPACE_UNITS, "")])
+        rows.append([(" ", self._tr("ПРОБЕЛ"), SPACE_UNITS, ""),
+                     ("backspace", "⌫", SHIFT_UNITS, "")])
         return rows
 
     def _layout_keyboard(self) -> None:
@@ -75,6 +77,7 @@ class KeyboardMixin:
         c.delete("all")
         self._kb_items.clear()
         self._kb_small.clear()
+        self._kb_click_targets.clear()
         self._hot_key = self._hot_shift = None
         self._kb_full_drawn = self._kb_full
 
@@ -110,6 +113,7 @@ class KeyboardMixin:
                 label = c.create_text(x + w / 2, y + kh / 2, text=text,
                                       fill=base_fg, font=label_font)
                 self._kb_items[name] = (rect, label)
+                self._kb_click_targets[rect] = name
                 if small and small_labels:
                     self._kb_small[name] = c.create_text(
                         x + self.px(3), y + self.px(1), text=small, anchor="nw",
@@ -117,6 +121,45 @@ class KeyboardMixin:
                 x += w + gap
         self._update_next_key()
         self._refresh_course_keys()
+        self._paint_virtual_shift()
+
+    def _paint_virtual_shift(self) -> None:
+        """Show the one-shot mouse Shift without hiding the next-key hint."""
+        for name in ("shift_left", "shift_right"):
+            if name in self._kb_items:
+                self._paint_key(name, self._virtual_shift or name == self._hot_shift)
+
+    def _on_virtual_key_click(self, event: tk.Event) -> None:
+        """Convert a canvas mouse click to a real typing action.
+
+        Canvas rectangles are visual objects, not Tk buttons: hit-test their
+        IDs instead of using find_closest, which would type on blank space.
+        """
+        clicked = self.kb_canvas.find_overlapping(event.x, event.y, event.x, event.y)
+        name = next((self._kb_click_targets[item] for item in reversed(clicked)
+                     if item in self._kb_click_targets), None)
+        if name is None:
+            return
+        if name in ("shift_left", "shift_right"):
+            self._virtual_shift = not self._virtual_shift
+        else:
+            if name == "backspace":
+                char, keysym = "", "BackSpace"
+            else:
+                char = name
+                if self._virtual_shift:
+                    # Respect the selected physical layout (including RU/UK/BE
+                    # punctuation and Dvorak/Colemak), not a naive .upper().
+                    layout = LAYOUTS[self._keyboard_code()]
+                    shifted = {base: upper for plain, raised in layout.full
+                               for base, upper in zip(plain, raised)}
+                    char = shifted.get(name, name.upper())
+                keysym = "space" if name == " " else name
+            self._virtual_shift = False  # Shift is one-shot on mouse/touch input
+            self._on_key(SimpleNamespace(char=char, keysym=keysym,
+                                         state=0x1 if char != name else 0))
+        self._paint_virtual_shift()
+        self.focus_set()
 
     def _paint_key(self, name: str | None, hot: bool) -> None:
         if name is None or name not in self._kb_items:

@@ -694,6 +694,75 @@ def test_text_options_change_the_text(app):
     assert app._option_chips["caps"].cget("fg") != theme.ACCENT
 
 
+def _click_virtual_key(window, name: str) -> None:
+    """Generate a real Tk mouse event at a rendered virtual key."""
+    rect, _ = window._kb_items[name]
+    x1, y1, x2, y2 = window.kb_canvas.coords(rect)
+    window.kb_canvas.event_generate(
+        "<Button-1>", x=round((x1 + x2) / 2), y=round((y1 + y2) / 2),
+    )
+    window.update()
+
+
+def test_clickable_virtual_keyboard_types_and_ignores_empty_canvas(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    settle(app)
+    _render(app, "аба")
+    assert "а" in app._kb_items and "б" in app._kb_items
+
+    app.kb_canvas.event_generate("<Button-1>", x=1, y=1)
+    app.update()
+    assert app.session.keystrokes == 0
+
+    for name in "аба":
+        _click_virtual_key(app, name)
+    assert app.session.finished
+    assert app.session.errors == 0
+    assert app.session.keystrokes == 3
+
+
+def test_clickable_virtual_keyboard_shift_punctuation_backspace(app):
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    app.toggle_punct()
+    settle(app)
+    _render(app, "Да, мир")
+    _click_virtual_key(app, "shift_left")
+    assert app._virtual_shift
+    _click_virtual_key(app, "д")
+    assert not app._virtual_shift
+    assert app.session.pos == 1 and app.session.errors == 0
+    _click_virtual_key(app, "а")
+    _click_virtual_key(app, "shift_right")
+    _click_virtual_key(app, ".")  # Russian Shift + period = comma
+    assert app.session.pos == 3 and app.session.errors == 0
+    _click_virtual_key(app, "backspace")
+    assert app.session.pos == 2
+    _click_virtual_key(app, "shift_left")
+    _click_virtual_key(app, ".")
+    _click_virtual_key(app, " ")
+    assert app.session.pos == 4 and app.session.errors == 0
+
+
+def test_virtual_keyboard_respects_english_layout_and_chip_click(app):
+    old_lang = app.lang
+    app._chips[0].event_generate("<Button-1>", x=4, y=4)
+    app.update()
+    assert app.lang != old_lang
+
+    app.set_keyboard_variant("dvorak")
+    app.toggle_punct()  # A shift key exists only in the full keyboard.
+    settle(app)
+    _render(app, "A?")
+    _click_virtual_key(app, "shift_left")
+    _click_virtual_key(app, "a")
+    assert app.session.pos == 1 and app.session.errors == 0
+    _click_virtual_key(app, "shift_right")
+    _click_virtual_key(app, "/")  # Dvorak Shift + slash = question mark
+    assert app.session.finished and app.session.errors == 0
+
+
 def test_full_keyboard_has_number_row_and_shifts(app):
     app.mode = Mode.COMMON
     app._refresh_chips()
