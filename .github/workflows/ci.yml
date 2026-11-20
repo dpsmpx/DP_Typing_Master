@@ -107,13 +107,3 @@ jobs:
           name: DP_Typing_Master-macos
           path: dist/DP_Typing_Master.app
           if-no-files-found: error
-
-  be-wordlist-preview:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Reproduce Belarusian wordlist from licensed frequency data
-        run: python tools/build_be_corpus.py --ci-preview

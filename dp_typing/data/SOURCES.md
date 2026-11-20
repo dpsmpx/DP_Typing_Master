@@ -32,8 +32,15 @@
 нарушают буквальный рейтинг исходного списка; это не выверенный
 лингвистами официальный «топ-1200». Требуется вычитка носителем языка.
 
-## Belarusian starter dataset
+## Belarusian frequency-informed dataset (November 2026)
 
-`be_common.txt` — небольшой вручную подготовленный набор, не
-частотный корпус 1200 слов; для паритета необходим независимый
-лицензионно-проверенный источник и вычитка носителем языка.
+`be_common.txt` — 1200 уникальных слов из [wmkeyboard-data,
+Belarusian frequency word list](https://github.com/wasi-master/wmkeyboard-data/blob/master/data/be/be_full.txt.gz)
+(CC BY-SA 4.0, источник — Leipzig Corpora Collection с обогащением Tatoeba,
+см. upstream `data/README.md`). Из частотного списка отобраны формы
+длиной 2–12 букв только из белорусского алфавита, с гласными; первые
+1200 уникальных подходящих слов сохраняют порядок частотного источника.
+
+Для воспроизведения: `python tools/build_be_corpus.py >
+dp_typing/data/be_common.txt`. Это подборка частотных *словоформ*,
+а не лемматизированный корпус; необходима проверка носителем.

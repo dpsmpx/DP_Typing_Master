@@ -21,6 +21,7 @@ from dp_typing.words import (
 RU_ALPHABET = set("абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
 EN_ALPHABET = set("abcdefghijklmnopqrstuvwxyz")
 UK_ALPHABET = set("абвгґдеєжзиіїйклмнопрстуфхцчшщьюя")
+BE_ALPHABET = set("абвгдеёжзійклмнопрстуўфхцчшыьэюя")
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ def rng():
     return random.Random(1234)
 
 
-@pytest.mark.parametrize("lang", ["ru", "en", "uk"])
+@pytest.mark.parametrize("lang", ["ru", "en", "uk", "be"])
 def test_wordlist_loads_and_is_clean(lang):
     words = load_words(lang)
     assert len(words) > 1000
@@ -39,6 +40,7 @@ def test_wordlist_loads_and_is_clean(lang):
 
 @pytest.mark.parametrize("lang,alphabet", [
     ("ru", RU_ALPHABET), ("en", EN_ALPHABET), ("uk", UK_ALPHABET),
+    ("be", BE_ALPHABET),
 ])
 def test_wordlist_covers_whole_alphabet(lang, alphabet):
     """Ревью #8: буква «й» раньше не генерировалась вообще."""

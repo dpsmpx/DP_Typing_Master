@@ -36,7 +36,7 @@ def make_words(data: bytes) -> list[str]:
         result.append(word)
         if len(result) == 1200:
             break
-    if len(result) != 1200 or not LETTERS <= set("".join(result)):
+    if len(result) != 1200 or not set("".join(result)) >= LETTERS:
         raise ValueError("Source did not yield 1200 alphabet-covering Belarusian words")
     return result
 
