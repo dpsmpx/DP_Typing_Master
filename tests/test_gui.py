@@ -704,6 +704,55 @@ def _click_virtual_key(window, name: str) -> None:
     window.update()
 
 
+def _press_real_tk_key(window, keysym: str, state: int = 0) -> None:
+    """Deliver a KeyPress through the focused Tk widget, not _on_key()."""
+    focused = window.focus_get()
+    assert focused is not None
+    assert focused.winfo_toplevel() is window
+    focused.event_generate("<KeyPress>", keysym=keysym, state=state)
+    window.update()
+
+
+def test_window_has_keyboard_focus_after_first_map(app):
+    """The original constructor focused an unmapped window, losing all keys."""
+    assert app.winfo_viewable()
+    assert app.focus_get() is app
+    app.lang = "en"
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    _render(app, "aba")
+    for key in "aba":
+        _press_real_tk_key(app, key)
+    assert app.session.finished
+    assert app.session.errors == 0
+
+
+def test_hardware_keys_and_hotkeys_work_after_clicking_text_panel(app):
+    app.lang = "en"
+    app.mode = Mode.COMMON
+    app._refresh_chips()
+    _render(app, "aba")
+    # Clicking the disabled Text transfers focus to it; the root bindings
+    # must keep receiving physical typing, Backspace and function keys.
+    app.text.event_generate("<Button-1>", x=12, y=12)
+    app.update()
+    assert app.focus_get() is app.text
+
+    _press_real_tk_key(app, "a")
+    _press_real_tk_key(app, "b")
+    assert app.session.pos == 2 and app.session.errors == 0
+    _press_real_tk_key(app, "BackSpace")
+    assert app.session.pos == 1
+    _press_real_tk_key(app, "b")
+    _press_real_tk_key(app, "a")
+    assert app.session.finished and app.session.errors == 0
+
+    _press_real_tk_key(app, "Tab")
+    assert app.session.target == "aba" and app.session.pos == 0
+    _press_real_tk_key(app, "F2")
+    assert app.lang != "en"
+
+
 def test_clickable_virtual_keyboard_types_and_ignores_empty_canvas(app):
     app.mode = Mode.COMMON
     app._refresh_chips()

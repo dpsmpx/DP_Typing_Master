@@ -276,6 +276,7 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
         # Флаг, а не winfo_ismapped(): тот меняется только после отрисовки,
         # и нажатие сразу после F1 проскочило бы в тест.
         self.help_open = False
+        self._startup_focus_pending = True
 
         self._build_fonts()
         self._build_ui()
@@ -286,10 +287,24 @@ class TypingApp(KeyboardMixin, StatsMixin, ComboMixin, tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self._quit)
         self.bind("<Configure>", self._on_window_configure)
-        # Фокус на само окно: клавиши ловит корневая привязка,
-        # отдельного поля ввода в приложении нет.
-        self.focus_set()
+        # focus_set() before the first Map silently fails on some systems.
+        # Claim keyboard focus only after the Tk window is actually visible.
+        self.bind("<Map>", self._on_window_map)
         self.new_test()
+
+    def _on_window_map(self, event: tk.Event) -> None:
+        """Focus the newly displayed typing window, not an unmapped Tk root."""
+        if event.widget is not self or not self._startup_focus_pending:
+            return
+        self._startup_focus_pending = False
+        self.after_idle(self._focus_after_map)
+
+    def _focus_after_map(self) -> None:
+        if self.winfo_exists() and self.winfo_viewable():
+            # First-show focus_force is intentional: focus_set alone can
+            # leave the window without a keyboard target after launch.
+            # Never force focus on periodic redraws or when popups open.
+            self.focus_force()
 
     # ------------------------------------------------------------- масштаб
 
