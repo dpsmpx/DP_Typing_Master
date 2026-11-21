@@ -704,7 +704,6 @@ def _click_virtual_key(window, name: str) -> None:
     window.update()
 
 
-
 def _press_real_tk_key(window, keysym: str, state: int = 0) -> None:
     """Deliver a KeyPress through the focused Tk widget, not _on_key()."""
     focused = window.focus_get()
