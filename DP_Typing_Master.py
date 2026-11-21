@@ -48,6 +48,13 @@ def main() -> int:
             app.update()
             if app.session is None or not app.session.target:
                 raise RuntimeError("Typing session failed to initialize")
+            # The packaged application must also accept a genuine Tk key
+            # event (not only start up and display its initial phrase).
+            app._start_session("aba")
+            app.event_generate("<KeyPress>", keysym="a")
+            app.update()
+            if app.session.pos != 1 or app.session.errors:
+                raise RuntimeError("Bundled application did not handle KeyPress")
         finally:
             app.destroy()
         return 0
